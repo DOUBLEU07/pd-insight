@@ -1,0 +1,60 @@
+# ---------------------------------------------------------------
+# Secrets and local configuration
+# ---------------------------------------------------------------
+# .env holds JWT_SECRET and the database password. Only .env.example
+# belongs in the repository.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---------------------------------------------------------------
+# Data: case uploads, databases and dumps
+# ---------------------------------------------------------------
+# These carry reviewer accounts (bcrypt password hashes) and the PRPD
+# images of real measurements, so none of it is publishable.
+*.db
+*.sqlite
+*.sqlite3
+*.sql
+backend/storage/
+
+# ---------------------------------------------------------------
+# Trained models
+# ---------------------------------------------------------------
+# Mounted in from MODELS_HOST_DIR at runtime; far too large for git.
+models/
+*.keras
+*.h5
+
+# ---------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# ---------------------------------------------------------------
+# Node and Next.js
+# ---------------------------------------------------------------
+node_modules/
+.next/
+out/
+build/
+*.tsbuildinfo
+.eslintcache
+
+# ---------------------------------------------------------------
+# Editors and OS
+# ---------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp

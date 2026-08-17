@@ -1,0 +1,93 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: pdinsight-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pdinsight}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pdinsight}
+      POSTGRES_DB: ${POSTGRES_DB:-pdinsight}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pdinsight} -d ${POSTGRES_DB:-pdinsight}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pdinsight-api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-pdinsight}:${POSTGRES_PASSWORD:-pdinsight}@db:5432/${POSTGRES_DB:-pdinsight}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      STORAGE_DIR: /app/storage
+      MODELS_DIR: /models
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      ENABLE_ML: ${ENABLE_ML:-true}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./backend:/app
+      - api_storage:/app/storage
+      # Mount the Colab .keras models read-only. Override MODELS_HOST_DIR in .env
+      # to point at wherever the model files actually live.
+      - ${MODELS_HOST_DIR:-./models}:/models:ro
+      # The same folder is mounted at /data so scripts/seed.py can reach
+      # final_summary.csv and the PRPD/TF images.
+      - ${DATA_HOST_DIR:-${MODELS_HOST_DIR:-./models}}:/data:ro
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: pdinsight-web
+    depends_on:
+      - api
+    environment:
+      # Server-side only: where the Next.js rewrite forwards /api/v1/* to.
+      # The browser never sees this, so one build works on any hostname.
+      API_INTERNAL_URL: http://api:8000
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+
+  # ---- throwaway public link -------------------------------------------
+  # docker compose --profile share up -d
+  # No Cloudflare account needed. Mints a random *.trycloudflare.com URL that
+  # changes on every restart; the URL is printed in this container's logs.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: pdinsight-tunnel
+    restart: unless-stopped
+    depends_on:
+      - web
+    command: tunnel --no-autoupdate --url http://web:3000
+    profiles: ["share"]
+
+  # ---- your own domain --------------------------------------------------
+  # docker compose --profile domain up -d
+  # Needs a domain on Cloudflare and a tunnel token from the Zero Trust
+  # dashboard (see README). Gives a stable https://pdinsight.dev with no
+  # interstitial. Point the tunnel's public hostname at http://web:3000.
+  tunnel-named:
+    image: cloudflare/cloudflared:latest
+    container_name: pdinsight-tunnel-named
+    restart: unless-stopped
+    depends_on:
+      - web
+    # Compose interpolates every service regardless of profile, so this uses a
+    # plain default rather than the `:?` error form — otherwise an unset token
+    # would break `docker compose` for the other profiles too. cloudflared
+    # reports a clear error of its own when the token is empty.
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    profiles: ["domain"]
+
+volumes:
+  pgdata:
+  api_storage:
