@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 
-import { getDataConsent, recordConsent } from '@/lib/consent';
+import { getAcceptedTermsToday, getDataConsent, recordConsent } from '@/lib/consent';
 
 /**
  * Terms-of-use and dataset-consent gate, per item 7 of the project review
@@ -10,14 +10,15 @@ import { getDataConsent, recordConsent } from '@/lib/consent';
  * system, allowing uploads to be reused for dataset/model development is
  * optional and declining it blocks nothing.
  *
- * It is shown on every entry to the system. Module scope, not storage, is
- * what remembers the answer, so a client-side navigation does not re-prompt
- * but any fresh load of the app does.
+ * Shown once per calendar day per browser: accepting stamps today's date in
+ * storage (getAcceptedTermsToday), so a fresh page load later the same day
+ * does not re-prompt. It rolls over at midnight, and again whenever
+ * TERMS_VERSION changes.
  */
 let acknowledgedThisLoad = false;
 
 export function ConsentGate({ onDecline }: { onDecline: () => void }) {
-  const [visible, setVisible] = useState(!acknowledgedThisLoad);
+  const [visible, setVisible] = useState(() => !acknowledgedThisLoad && !getAcceptedTermsToday());
   const [terms, setTerms] = useState(false);
   // The optional answer defaults to whatever was chosen last time.
   const [data, setData] = useState(() => getDataConsent());
@@ -36,7 +37,8 @@ export function ConsentGate({ onDecline }: { onDecline: () => void }) {
         <div className="modal-head">
           <h2 id="consent-title">Terms of Use &amp; Data Consent</h2>
           <p className="m-0 mt-[3px] text-[12px] text-slate-400">
-            Please confirm before using PD Insight. This appears each time you enter the system.
+            Please confirm before using PD Insight. Accepting keeps this from showing again for
+            the rest of today.
           </p>
         </div>
 

@@ -1,18 +1,20 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 
 import {
-  Spinner,
-  StatusBadge,
-  fmtDate,
-  severityBucket,
-  severityPillClass,
-} from '@/components/ui/primitives';
+  groupCasesBySeverity,
+  SeverityGroupCards,
+  type SeverityKey,
+} from '@/components/case/SeverityGroups';
+import { Spinner, fmtDate } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/app-context';
+import { withinDateFilter, type DateFilter } from '@/lib/filters';
 import type { BatchSummary } from '@/lib/types';
+
+type SeverityFilter = 'all' | SeverityKey;
 
 export default function BatchPreviewPage() {
   const router = useRouter();
@@ -22,6 +24,8 @@ export default function BatchPreviewPage() {
 
   const [batch, setBatch] = useState<BatchSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [dateFilter, setDateFilter] = useState<DateFilter>('all');
+  const [severityFilter, setSeverityFilter] = useState<SeverityFilter>('all');
 
   const load = useCallback(async () => {
     try {
@@ -44,10 +48,18 @@ export default function BatchPreviewPage() {
     void load();
   }
 
+  const groups = useMemo(() => {
+    const cases = (batch?.cases ?? []).filter((c) => withinDateFilter(c.created_time, dateFilter));
+    return groupCasesBySeverity(cases).filter(
+      (g) => severityFilter === 'all' || g.key === severityFilter,
+    );
+  }, [batch, dateFilter, severityFilter]);
+
   if (loading) return <Spinner label="Loading batch…" />;
   if (!batch) return <p className="hint">Batch not found.</p>;
 
   const reviewed = batch.cases?.filter((c) => c.status === 'done').length ?? 0;
+  const filtersActive = dateFilter !== 'all' || severityFilter !== 'all';
 
   return (
     <>
@@ -66,69 +78,69 @@ export default function BatchPreviewPage() {
         </div>
       </div>
 
-      <div className="card">
-        <h2>Images in this batch</h2>
-        <p className="hint">
-          Click Preview to open a single image in the case review workflow. &quot;← Back&quot;
+      {(batch.cases ?? []).length > 0 && (
+        <div className="topfilters">
+          <label className="flex items-center gap-[6px]">
+            Uploaded:
+            <select
+              value={dateFilter}
+              onChange={(e) => setDateFilter(e.target.value as DateFilter)}
+              className="w-auto min-w-[150px]"
+            >
+              <option value="all">All time</option>
+              <option value="today">Today</option>
+              <option value="3d">Last 3 days</option>
+              <option value="7d">Last 7 days</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-[6px]">
+            Severity:
+            <select
+              value={severityFilter}
+              onChange={(e) => setSeverityFilter(e.target.value as SeverityFilter)}
+              className="w-auto min-w-[150px]"
+            >
+              <option value="all">All severities</option>
+              <option value="High">High</option>
+              <option value="Moderate">Moderate</option>
+              <option value="Initial">Initial</option>
+              <option value="Pending">Pending</option>
+            </select>
+          </label>
+          {filtersActive && (
+            <span
+              className="small-link"
+              onClick={() => {
+                setDateFilter('all');
+                setSeverityFilter('all');
+              }}
+            >
+              Clear filters
+            </span>
+          )}
+        </div>
+      )}
+
+      <div className="dash-section">
+        <div className="dash-section-head">
+          <h2>Images in this folder, by severity</h2>
+        </div>
+        <p className="hint -mt-2 mb-[14px]">
+          Severity comes from the confirmed PD source group combined with the measured gap-time.
+          Click Open case to open a single image in the case review workflow. &quot;← Back&quot;
           returns here.
         </p>
-        <table className="data">
-          <thead>
-            <tr>
-              <th>Case</th>
-              <th>Defect</th>
-              <th>PD Source</th>
-              <th>Severity</th>
-              <th>Status</th>
-              <th>Reviewer</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {(batch.cases ?? []).map((c) => {
-              const bucket = severityBucket(c.severity_by_gap_time);
-              return (
-                <tr key={c.id}>
-                  <td>
-                    <b>{c.case_base_name}</b>
-                  </td>
-                  <td className="text-[12.5px] text-slate-500">{c.defect_name ?? '-'}</td>
-                  <td className="text-[12.5px]">{c.confirmed_pd_source_type ?? '-'}</td>
-                  <td>
-                    <span className={`pill ${severityPillClass(c.severity_by_gap_time)}`}>
-                      {bucket}
-                    </span>
-                  </td>
-                  <td>
-                    <StatusBadge status={c.status} />
-                  </td>
-                  <td className="text-[12.5px] text-slate-500">{c.reviewer_name ?? '-'}</td>
-                  <td className="whitespace-nowrap">
-                    <span
-                      className="small-link"
-                      onClick={() => router.push(`/cases/${c.id}?from=batch&batch=${batch.id}`)}
-                    >
-                      Preview →
-                    </span>
-                    <span
-                      className="small-link ml-[10px] text-internal"
-                      onClick={() => void removeCase(c.id, c.case_base_name)}
-                    >
-                      Delete
-                    </span>
-                  </td>
-                </tr>
-              );
-            })}
-            {(batch.cases ?? []).length === 0 && (
-              <tr>
-                <td colSpan={7} className="hint">
-                  This batch no longer has any cases (they may have been deleted).
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+
+        {(batch.cases ?? []).length === 0 ? (
+          <p className="hint">This batch no longer has any cases (they may have been deleted).</p>
+        ) : (
+          <SeverityGroupCards
+            groups={groups}
+            onOpenCase={(id) => router.push(`/cases/${id}?from=batch&batch=${batch.id}`)}
+            onDeleteCase={(id, name) => void removeCase(id, name)}
+            emptyLabel={filtersActive ? 'No cases match this filter.' : 'No cases in this group.'}
+          />
+        )}
       </div>
     </>
   );

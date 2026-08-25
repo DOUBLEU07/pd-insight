@@ -60,23 +60,38 @@ export function SummaryChart({
     );
     ctx.textAlign = 'left';
 
-    const frame = { x_left: 62, x_right: w - 24, y_top: 74, y_bottom: h - 46 };
+    // The plottable area on the canvas, leaving room for the header text and
+    // the phase-axis labels/legend. The real PRPD image is drawn into this
+    // box at its own aspect ratio, and the calibration frame below is mapped
+    // through the same scale/offset — so the axis lines drawn here always
+    // match whatever was set on the Calibration step, instead of an
+    // arbitrary fixed box.
+    const box = { x: 40, y: 60, w: w - 80, h: h - 130 };
+    const imgW = pdCase.image_width ?? 400;
+    const imgH = pdCase.image_height ?? 300;
+    const imgScale = Math.min(box.w / imgW, box.h / imgH);
+    const imgX = box.x + (box.w - imgW * imgScale) / 2;
+    const imgY = box.y + (box.h - imgH * imgScale) / 2;
+    const toCanvasX = (px: number) => imgX + px * imgScale;
+    const toCanvasY = (px: number) => imgY + px * imgScale;
+
+    const calib = pdCase.calibration;
+    const frame = {
+      x_left: toCanvasX(calib.x_left_0deg ?? 0),
+      x_right: toCanvasX(calib.x_right_360deg ?? imgW),
+      y_top: toCanvasY(calib.y_top_plot ?? 0),
+      y_bottom: toCanvasY(calib.y_bottom_plot ?? imgH),
+    };
     const midY = (frame.y_top + frame.y_bottom) / 2;
     const halfH = (frame.y_bottom - frame.y_top) / 2;
     const spanX = frame.x_right - frame.x_left;
     const phaseX = (deg: number) => frame.x_left + (deg / 360) * spanX;
 
-    // ---- the PRPD bitmap, fitted into the plot frame ----
+    // ---- the real PRPD bitmap, at its own aspect ratio ----
     if (imgRef.current) {
       ctx.save();
       ctx.globalAlpha = 0.9;
-      ctx.drawImage(
-        imgRef.current,
-        frame.x_left,
-        frame.y_top,
-        spanX,
-        frame.y_bottom - frame.y_top,
-      );
+      ctx.drawImage(imgRef.current, imgX, imgY, imgW * imgScale, imgH * imgScale);
       ctx.restore();
     }
 
