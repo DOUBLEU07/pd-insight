@@ -41,6 +41,8 @@
   --slate-700: #334155;
   --slate-900: #0f172a;
   --card-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 4px 14px -6px rgba(15, 23, 42, 0.1);
+  /* Shared easing for anything that enters, lifts or settles into place. */
+  --ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @layer base {
@@ -52,6 +54,46 @@
     font-family: 'Kanit', -apple-system, 'Segoe UI', sans-serif;
     font-size: 14px;
     margin: 0;
+  }
+}
+
+/* ---------- MOTION ----------
+   One entrance animation, reused everywhere something appears (a page, a
+   wizard step, a card). Kept off entirely for prefers-reduced-motion so nothing
+   here is load-bearing for comprehension. */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .card,
+  .kpi-card,
+  .quick-action-card {
+    animation: fadeInUp 0.36s var(--ease-emphasized) both;
+  }
+  /* A light stagger so groups of cards settle in sequence, not all at once. */
+  .kpi-grid .kpi-card:nth-child(2),
+  .dash-section .card:nth-child(2),
+  .quick-actions-grid .quick-action-card:nth-child(2) {
+    animation-delay: 0.04s;
+  }
+  .kpi-grid .kpi-card:nth-child(3),
+  .dash-section .card:nth-child(3),
+  .quick-actions-grid .quick-action-card:nth-child(3) {
+    animation-delay: 0.08s;
+  }
+  .kpi-grid .kpi-card:nth-child(4),
+  .quick-actions-grid .quick-action-card:nth-child(4) {
+    animation-delay: 0.12s;
+  }
+  .wizard-2col {
+    animation: fadeInUp 0.3s var(--ease-emphasized) both;
   }
 }
 
@@ -73,19 +115,28 @@
     @apply mt-1 flex flex-col gap-[3px];
   }
   .sidebar-nav button {
-    @apply flex w-full items-center gap-[11px] rounded-md border-none bg-transparent px-3 py-[10px] text-left text-[13.5px] font-medium text-slate-500 transition-colors;
+    @apply relative flex w-full items-center gap-[11px] rounded-md border-none bg-transparent px-3 py-[10px] text-left text-[13.5px] font-medium text-slate-500 transition-[background-color,color,transform] duration-150;
   }
   .sidebar-nav button svg {
-    @apply h-[17px] w-[17px] flex-shrink-0 opacity-[.85];
+    @apply h-[17px] w-[17px] flex-shrink-0 opacity-[.85] transition-opacity duration-150;
   }
   .sidebar-nav button:hover {
-    @apply bg-slate-100 text-slate-900;
+    @apply translate-x-[1px] bg-slate-100 text-slate-900;
   }
   .sidebar-nav button.active {
     @apply bg-brand-50 text-brand-700;
   }
   .sidebar-nav button.active svg {
     @apply text-brand-500 opacity-100;
+  }
+  /* Sliding accent bar on the active item, rather than a hard cut to a new state. */
+  .sidebar-nav button::before {
+    @apply absolute bottom-[6px] left-0 top-[6px] w-[3px] scale-y-0 rounded-full bg-brand-500 opacity-0 transition-[transform,opacity] duration-200;
+    content: '';
+    transition-timing-function: var(--ease-emphasized);
+  }
+  .sidebar-nav button.active::before {
+    @apply scale-y-100 opacity-100;
   }
   .sidebar-foot {
     @apply flex flex-col gap-2 border-t border-slate-200 pt-[14px];
@@ -133,8 +184,11 @@
   .hero-logo-slot img {
     @apply h-full w-auto object-contain;
   }
+  /* Capped so content stays readable and well-proportioned on very wide
+     monitors; the shell (sidebar + topbar background) still fills the
+     viewport edge to edge. */
   main.content {
-    @apply w-full flex-1 px-8 pb-[60px] pt-6;
+    @apply mx-auto w-full max-w-[1560px] flex-1 px-8 pb-[60px] pt-6;
   }
 
   /* ---------- CARDS ---------- */
@@ -171,7 +225,15 @@
     @apply h-2 flex-1 overflow-hidden rounded-full bg-slate-100;
   }
   .conf-bar-fill {
-    @apply h-full rounded-full transition-[width] duration-500 ease-out;
+    @apply h-full rounded-full transition-[width] duration-700;
+    transition-timing-function: var(--ease-emphasized);
+  }
+  /* Bars settle one after another instead of all snapping to width at once. */
+  .conf-row:nth-of-type(2) .conf-bar-fill {
+    transition-delay: 60ms;
+  }
+  .conf-row:nth-of-type(3) .conf-bar-fill {
+    transition-delay: 120ms;
   }
   .conf-val {
     @apply w-[52px] text-right text-[12.5px] font-bold text-slate-900;
@@ -246,11 +308,15 @@
 
   /* ---------- BUTTONS ---------- */
   .btn {
-    @apply inline-flex cursor-pointer items-center gap-[7px] rounded-md border-none px-[17px] py-[9px] text-[13px] font-semibold leading-none transition-colors;
+    @apply inline-flex cursor-pointer items-center gap-[7px] rounded-md border-none px-[17px] py-[9px] text-[13px] font-semibold leading-none transition-[background-color,color,border-color,opacity,transform,box-shadow] duration-150;
     font-family: inherit;
   }
+  .btn:not(:disabled):hover {
+    @apply -translate-y-px shadow-card;
+  }
   .btn:active {
-    @apply opacity-[.85];
+    @apply translate-y-0 opacity-[.85];
+    transition-duration: 60ms;
   }
   .btn:disabled {
     @apply cursor-not-allowed opacity-40;
@@ -322,7 +388,7 @@
 
   /* ---------- UPLOAD ---------- */
   .upload-box {
-    @apply cursor-pointer rounded-lg border-[1.5px] border-dashed border-slate-300 bg-slate-50 p-4 text-center transition-colors hover:border-brand-400 hover:bg-brand-50;
+    @apply cursor-pointer rounded-lg border-[1.5px] border-dashed border-slate-300 bg-slate-50 p-4 text-center transition-[background-color,border-color,transform] duration-150 hover:-translate-y-px hover:border-brand-400 hover:bg-brand-50;
   }
   .upload-box.filled {
     @apply border-solid border-emerald-200 bg-emerald-50;
@@ -366,7 +432,7 @@
     @apply mb-6 flex flex-wrap gap-4;
   }
   .kpi-card {
-    @apply relative min-w-[160px] flex-1 overflow-hidden rounded-lg bg-white px-5 py-4 shadow-card;
+    @apply relative min-w-[160px] max-w-[300px] flex-1 overflow-hidden rounded-lg bg-white px-5 py-4 shadow-card;
   }
   .kpi-accent {
     @apply absolute bottom-0 left-0 top-0 w-1;
@@ -663,7 +729,8 @@
 
   /* ---------- TOAST ---------- */
   .toast {
-    @apply fixed bottom-[22px] right-[22px] z-[200] max-w-[360px] translate-y-[10px] rounded-lg border border-slate-200 border-l-[3px] border-l-brand-400 bg-white px-5 py-[13px] text-[13px] text-slate-900 opacity-0 shadow-card transition-all duration-[250ms];
+    @apply fixed bottom-[22px] right-[22px] z-[200] max-w-[360px] translate-y-[10px] rounded-lg border border-slate-200 border-l-[3px] border-l-brand-400 bg-white px-5 py-[13px] text-[13px] text-slate-900 opacity-0 shadow-card transition-all duration-300;
+    transition-timing-function: var(--ease-emphasized);
   }
   .toast.show {
     @apply translate-y-0 opacity-100;

@@ -33,14 +33,27 @@ export function getDataConsent(): boolean {
 
 export function getAcceptedTermsVersion(): string | null {
   if (typeof window === 'undefined') return null;
-  return window.localStorage.getItem(TERMS_VERSION_KEY);
+  return (window.localStorage.getItem(TERMS_VERSION_KEY) ?? '').split('|')[0] || null;
+}
+
+/** Local calendar date, e.g. "2026-08-25" — the gate re-prompts once this rolls over. */
+function todayStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** True once the current terms version has been accepted earlier today. */
+export function getAcceptedTermsToday(): boolean {
+  if (typeof window === 'undefined') return false;
+  const [version, date] = (window.localStorage.getItem(TERMS_VERSION_KEY) ?? '').split('|');
+  return version === TERMS_VERSION && date === todayStr();
 }
 
 export function recordConsent(terms: boolean, data: boolean): ConsentRecord {
   const record: ConsentRecord = { terms, data, at: new Date().toISOString() };
   if (typeof window !== 'undefined') {
     window.localStorage.setItem(DATA_CONSENT_KEY, String(data));
-    if (terms) window.localStorage.setItem(TERMS_VERSION_KEY, TERMS_VERSION);
+    if (terms) window.localStorage.setItem(TERMS_VERSION_KEY, `${TERMS_VERSION}|${todayStr()}`);
   }
   return record;
 }

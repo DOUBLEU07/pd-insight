@@ -68,9 +68,14 @@ $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 $publicUrl = $null
 
 while ((Get-Date) -lt $deadline) {
+    # `docker compose logs` returns the container's full history, not just this
+    # run's — reusing an existing (stopped) tunnel container keeps prior runs'
+    # log lines around. Take the *last* URL announced, not the first, so an
+    # old, dead quick-tunnel link from a previous share session is never
+    # returned instead of the one that is actually live now.
     $logs = docker compose logs tunnel 2>&1 | Out-String
-    $match = [regex]::Match($logs, 'https://[a-z0-9-]+\.trycloudflare\.com')
-    if ($match.Success) { $publicUrl = $match.Value; break }
+    $matches = [regex]::Matches($logs, 'https://[a-z0-9-]+\.trycloudflare\.com')
+    if ($matches.Count -gt 0) { $publicUrl = $matches[$matches.Count - 1].Value; break }
     Start-Sleep -Seconds 3
 }
 

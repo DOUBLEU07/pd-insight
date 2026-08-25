@@ -284,6 +284,12 @@ def dashboard(
         count_result("Internal"),
     )
 
+    # Folder/batch uploads get their own severity breakdown on the batch's own
+    # page; mixing them in here made this table an unreadable pile of every
+    # case regardless of where it came from. This section is single-upload
+    # cases only.
+    single_cases = [c for c in cases if c.batch is not None and c.batch.is_single]
+
     groups = []
     for key, label in (
         ("High", "High severity"),
@@ -291,7 +297,7 @@ def dashboard(
         ("Initial", "Initial severity"),
         ("Pending", "Awaiting gap-time measurement"),
     ):
-        members = [c for c in cases if _severity_bucket(c) == key]
+        members = [c for c in single_cases if _severity_bucket(c) == key]
         groups.append(
             {
                 "key": key,

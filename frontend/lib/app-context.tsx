@@ -55,12 +55,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Reference data (thresholds, dropdown values, ML status) is shared app-wide.
+  // Retried on failure: a single dropped request here (e.g. the API container
+  // still starting up under docker compose) used to leave every dropdown that
+  // reads from `options` — PD source included — empty for the rest of the
+  // session, with no way to recover short of logging out and back in.
   const refreshOptions = useCallback(async () => {
-    try {
-      setOptions(await api.options());
-    } catch {
-      /* keep whatever is already loaded rather than blanking the UI */
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        setOptions(await api.options());
+        return;
+      } catch {
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+      }
     }
+    /* keep whatever is already loaded rather than blanking the UI */
   }, []);
 
   useEffect(() => {

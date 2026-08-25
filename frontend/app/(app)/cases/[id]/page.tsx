@@ -1265,7 +1265,6 @@ function FullSummaryTable({ pdCase: c }: { pdCase: PdCase }) {
           ['PRPD file', c.prpd_filename ?? '-'],
           ['TF file', c.tf_filename ?? '-'],
           ['Inference mode', c.n_files === 2 ? 'Hybrid' : 'PRPD-only'],
-          ['Engine', c.inference_engine],
           ['Image size', `${c.image_width}×${c.image_height}`],
           ['Updated', fmtDate(c.updated_time)],
         ])}

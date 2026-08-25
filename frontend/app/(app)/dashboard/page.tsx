@@ -1,40 +1,25 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
+import { SeverityGroupCards, type SeverityKey } from '@/components/case/SeverityGroups';
 import { FileNewIcon, LayersIcon, SlidersIcon } from '@/components/ui/icons';
-import {
-  EmptyRow,
-  Spinner,
-  StatusBadge,
-  fmtDate,
-  severityBucket,
-  severityPillClass,
-} from '@/components/ui/primitives';
+import { Spinner, StatusBadge, fmtDate } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/app-context';
+import { withinDateFilter, type DateFilter } from '@/lib/filters';
 import type { DashboardData } from '@/lib/types';
 
-const GROUP_ACCENT: Record<string, string> = {
-  High: 'var(--internal)',
-  Moderate: 'var(--corona)',
-  Initial: 'var(--emerald-500)',
-  Pending: 'var(--slate-400)',
-};
-
-const GROUP_PILL: Record<string, string> = {
-  High: 'pill-red',
-  Moderate: 'pill-amber',
-  Initial: 'pill-green',
-  Pending: 'pill-gray',
-};
+type SeverityFilter = 'all' | SeverityKey;
 
 export default function DashboardPage() {
   const router = useRouter();
   const { toast } = useApp();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [dateFilter, setDateFilter] = useState<DateFilter>('all');
+  const [severityFilter, setSeverityFilter] = useState<SeverityFilter>('all');
 
   const load = useCallback(async () => {
     try {
@@ -74,13 +59,72 @@ export default function DashboardPage() {
     void load();
   }
 
+  const filteredHistory = useMemo(
+    () => (data?.upload_history ?? []).filter((b) => withinDateFilter(b.upload_date, dateFilter)),
+    [data, dateFilter],
+  );
+
+  const filteredGroups = useMemo(
+    () =>
+      (data?.severity_groups ?? [])
+        .filter((g) => severityFilter === 'all' || g.key === severityFilter)
+        .map((g) => {
+          const cases = g.cases.filter((c) => withinDateFilter(c.created_time, dateFilter));
+          return { ...g, cases, count: cases.length };
+        }),
+    [data, severityFilter, dateFilter],
+  );
+
   if (loading) return <Spinner label="Loading dashboard…" />;
   if (!data) return <p className="hint">Dashboard unavailable.</p>;
 
   const { kpi } = data;
+  const filtersActive = dateFilter !== 'all' || severityFilter !== 'all';
 
   return (
     <>
+      {/* ---------- Filters ---------- */}
+      <div className="topfilters">
+        <label className="flex items-center gap-[6px]">
+          Uploaded:
+          <select
+            value={dateFilter}
+            onChange={(e) => setDateFilter(e.target.value as DateFilter)}
+            className="w-auto min-w-[150px]"
+          >
+            <option value="all">All time</option>
+            <option value="today">Today</option>
+            <option value="3d">Last 3 days</option>
+            <option value="7d">Last 7 days</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-[6px]">
+          Severity:
+          <select
+            value={severityFilter}
+            onChange={(e) => setSeverityFilter(e.target.value as SeverityFilter)}
+            className="w-auto min-w-[150px]"
+          >
+            <option value="all">All severities</option>
+            <option value="High">High</option>
+            <option value="Moderate">Moderate</option>
+            <option value="Initial">Initial</option>
+            <option value="Pending">Pending</option>
+          </select>
+        </label>
+        {filtersActive && (
+          <span
+            className="small-link"
+            onClick={() => {
+              setDateFilter('all');
+              setSeverityFilter('all');
+            }}
+          >
+            Clear filters
+          </span>
+        )}
+      </div>
+
       <div className="kpi-grid">
         <div className="kpi-card">
           <span className="kpi-accent" style={{ background: '#1F4E79' }} />
@@ -116,13 +160,16 @@ export default function DashboardPage() {
         <p className="hint -mt-2 mb-[14px]">
           Every single-case or folder/batch upload, ordered by what needs attention first: not yet
           fully reviewed, then how many high-severity images it contains, then most recently
-          uploaded.
+          uploaded. The severity filter above does not apply here since a folder holds many
+          severities at once. Open a folder to see its own breakdown.
         </p>
 
-        {data.upload_history.length === 0 ? (
-          <p className="hint">No uploads yet.</p>
+        {filteredHistory.length === 0 ? (
+          <p className="hint">
+            {data.upload_history.length === 0 ? 'No uploads yet.' : 'No uploads match this filter.'}
+          </p>
         ) : (
-          data.upload_history.map((b) => (
+          filteredHistory.map((b) => (
             <div
               key={b.id}
               className="card mb-[10px] flex flex-wrap items-center gap-4 px-5 py-[14px]"
@@ -185,71 +232,17 @@ export default function DashboardPage() {
         </div>
         <p className="hint -mt-2 mb-[14px]">
           Severity comes from the confirmed PD source group combined with the measured gap-time.
-          Cases not yet measured are grouped separately below.
+          Cases not yet measured are grouped separately below. This shows single-case uploads
+          only. Folder/batch uploads keep their own severity breakdown on the folder&apos;s page
+          (open one from Upload History above).
         </p>
 
-        {data.severity_groups.map((g) => (
-          <div
-            key={g.key}
-            className="card mb-[14px] overflow-hidden p-0"
-            style={{ borderLeft: `4px solid ${GROUP_ACCENT[g.key]}` }}
-          >
-            <div className="flex items-center justify-between px-5 pt-[14px]">
-              <span className="text-[12.5px] font-bold text-slate-700">{g.label}</span>
-              <span className={`pill ${GROUP_PILL[g.key]}`}>
-                {g.count} case{g.count === 1 ? '' : 's'}
-              </span>
-            </div>
-
-            {g.cases.length === 0 ? (
-              <p className="hint px-5 pb-4 pt-[10px]">No cases in this group.</p>
-            ) : (
-              <div className="max-h-[420px] overflow-y-auto">
-                <table className="data mt-[6px]">
-                  <thead>
-                    <tr>
-                      <th>Case ID</th>
-                      <th>Defect</th>
-                      <th>PD Source</th>
-                      <th>Status</th>
-                      <th>Reviewer</th>
-                      <th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {g.cases.map((c) => (
-                      <tr key={c.id}>
-                        <td>
-                          <b>{c.case_base_name}</b>
-                        </td>
-                        <td className="text-[12.5px] text-slate-500">{c.defect_name ?? '-'}</td>
-                        <td className="text-[12.5px]">{c.confirmed_pd_source_type ?? '-'}</td>
-                        <td>
-                          <StatusBadge status={c.status} />
-                        </td>
-                        <td className="text-[12.5px] text-slate-500">{c.reviewer_name ?? '-'}</td>
-                        <td className="whitespace-nowrap">
-                          <span
-                            className="small-link"
-                            onClick={() => router.push(`/cases/${c.id}`)}
-                          >
-                            Open case →
-                          </span>
-                          <span
-                            className="small-link ml-[10px] text-internal"
-                            onClick={() => void removeCase(c.id, c.case_base_name)}
-                          >
-                            Delete
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        ))}
+        <SeverityGroupCards
+          groups={filteredGroups}
+          onOpenCase={(id) => router.push(`/cases/${id}`)}
+          onDeleteCase={(id, name) => void removeCase(id, name)}
+          emptyLabel={filtersActive ? 'No cases match this filter.' : 'No cases in this group.'}
+        />
       </div>
 
       {/* ---------- Quick Actions ---------- */}

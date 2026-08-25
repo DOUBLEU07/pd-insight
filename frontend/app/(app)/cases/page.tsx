@@ -40,6 +40,8 @@ export default function CaseWorkflowPage() {
   const [prpd, setPrpd] = useState<Slot>(EMPTY_SLOT);
   const [tf, setTf] = useState<Slot>(EMPTY_SLOT);
   const [uploading, setUploading] = useState(false);
+  const [showChecklist, setShowChecklist] = useState(false);
+  const [acceptedChecklist, setAcceptedChecklist] = useState(false);
   const prpdInput = useRef<HTMLInputElement>(null);
   const tfInput = useRef<HTMLInputElement>(null);
 
@@ -89,8 +91,31 @@ export default function CaseWorkflowPage() {
   }, [mode, loading]);
 
   // ---------------------------------------------------------------- upload
+  /**
+   * Filename-only heuristic for the obvious mismatch: a file clearly named as
+   * a TF map dropped into the PRPD slot, or vice versa. Mirrors the backend's
+   * filename_suggests_prpd/tf so a wrong-slot upload is caught immediately
+   * instead of only surfacing as an input-quality warning after Run.
+   */
+  function slotMismatch(slot: 'prpd' | 'tf', filename: string): string | null {
+    const lower = filename.toLowerCase();
+    const saysPrpd = /prpd|pattern/.test(lower);
+    const saysTf = /tf|twmap/.test(lower);
+    if (slot === 'prpd' && saysTf && !saysPrpd) {
+      return `"${filename}" looks like a TF map, not a PRPD image. Upload it in the TF map slot instead.`;
+    }
+    if (slot === 'tf' && saysPrpd && !saysTf) {
+      return `"${filename}" looks like a PRPD image, not a TF map. Upload it in the PRPD slot instead.`;
+    }
+    return null;
+  }
+
   function acceptFile(slot: 'prpd' | 'tf', file: File | undefined) {
     if (!file) return;
+    // A new file changes what "Before you run" would need to confirm.
+    setShowChecklist(false);
+    setAcceptedChecklist(false);
+
     const ext = `.${(file.name.split('.').pop() ?? '').toLowerCase()}`;
     const setter = slot === 'prpd' ? setPrpd : setTf;
 
@@ -101,6 +126,13 @@ export default function CaseWorkflowPage() {
         rejected: `"${file.name}" (${ext || '?'}) is not a supported image type`,
       });
       toast(`Rejected "${file.name}": unsupported file type`);
+      return;
+    }
+
+    const mismatch = slotMismatch(slot, file.name);
+    if (mismatch) {
+      setter({ file: null, preview: null, rejected: mismatch });
+      toast(`Rejected "${file.name}": wrong upload slot`);
       return;
     }
 
@@ -122,7 +154,7 @@ export default function CaseWorkflowPage() {
       if (tf.file) form.set('tf', tf.file);
 
       const created = await api.uploadCase(form);
-      const analysed = await api.analyze(created.id);
+      const analysed = await api.analyze(created.id, undefined, true);
       toast(`Analysis complete for ${analysed.case_base_name}`);
       router.push(`/cases/${analysed.id}`);
     } catch (e) {
@@ -135,6 +167,8 @@ export default function CaseWorkflowPage() {
   function resetUpload() {
     setPrpd(EMPTY_SLOT);
     setTf(EMPTY_SLOT);
+    setShowChecklist(false);
+    setAcceptedChecklist(false);
     if (prpdInput.current) prpdInput.current.value = '';
     if (tfInput.current) tfInput.current.value = '';
   }
@@ -273,28 +307,6 @@ export default function CaseWorkflowPage() {
             />
           </div>
 
-          <div className="callout callout-slate mb-[14px]">
-            <b className="mb-[6px] block text-slate-700">Before you upload</b>
-            <ul className="help-checklist">
-              <li>
-                The image is a <b>PRPD pattern</b> with interpretable discharge clusters, not
-                another type of graph or signal plot.
-              </li>
-              <li>
-                Discharge activity is present on <b>both polarities</b>; gap-time analysis needs
-                two clusters of opposite polarity.
-              </li>
-              <li>
-                The plot is not low-resolution, cropped, obscured by text or symbols, or heavily
-                noisy.
-              </li>
-              <li>
-                For Hybrid, the PRPD and the TF Map come from the <b>same measurement</b>.
-                Unrelated images must not be paired.
-              </li>
-            </ul>
-          </div>
-
           <div className="inference-mode-row">
             <span>Inference mode</span>
             <span className="inference-badge">{inferenceMode}</span>
@@ -303,12 +315,16 @@ export default function CaseWorkflowPage() {
           <div className="mt-[6px] flex items-center gap-2">
             <button
               className="btn btn-blue flex-1 justify-center"
-              onClick={() => void runAnalysis()}
-              disabled={!prpd.file || uploading}
+              onClick={() => (showChecklist ? void runAnalysis() : setShowChecklist(true))}
+              disabled={!prpd.file || uploading || (showChecklist && !acceptedChecklist)}
               type="button"
             >
               <PlayIcon className="btn-icon" />
-              {uploading ? 'Running analysis…' : 'Run Analysis'}
+              {uploading
+                ? 'Running analysis…'
+                : showChecklist
+                  ? 'Confirm & Run Analysis'
+                  : 'Run Analysis'}
             </button>
             <button
               className="btn btn-outline"
@@ -319,6 +335,39 @@ export default function CaseWorkflowPage() {
               <RefreshIcon className="btn-icon" />
             </button>
           </div>
+
+          {showChecklist && (
+            <div className="callout callout-slate mt-[10px] mb-[14px]">
+              <b className="mb-[6px] block text-slate-700">Before you run analysis, confirm</b>
+              <ul className="help-bullets">
+                <li>
+                  The image is a <b>PRPD pattern</b> with interpretable discharge clusters, not
+                  another type of graph or signal plot.
+                </li>
+                <li>
+                  Discharge activity is present on <b>both polarities</b>; gap-time analysis needs
+                  two clusters of opposite polarity.
+                </li>
+                <li>
+                  The plot is not low-resolution, cropped, obscured by text or symbols, or heavily
+                  noisy.
+                </li>
+                <li>
+                  For Hybrid, the PRPD and the TF Map come from the <b>same measurement</b>.
+                  Unrelated images must not be paired.
+                </li>
+              </ul>
+              <label className="mt-[10px] flex items-center gap-2 text-[12.5px] font-medium text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={acceptedChecklist}
+                  onChange={(e) => setAcceptedChecklist(e.target.checked)}
+                  className="h-auto w-auto"
+                />
+                I confirm the uploaded image(s) meet the requirements above.
+              </label>
+            </div>
+          )}
 
           {prpd.file && (
             <div className="mt-[10px]">
