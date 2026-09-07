@@ -1,138 +1,47 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
-import { KV, Spinner } from '@/components/ui/primitives';
+import { ThresholdsPanel } from '@/components/settings/ThresholdsPanel';
+import { KV, Spinner, fmtDate } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/app-context';
-import type { ThresholdKey, ThresholdSettings } from '@/lib/types';
-
-/** Editable thresholds, grouped the way the rule engine applies them. */
-const THRESHOLD_GROUPS: {
-  title: string;
-  hint: string;
-  rows: { key: ThresholdKey; label: string; help: string }[];
-}[] = [
-  {
-    title: 'Classification',
-    hint: 'Decides whether a class wins at all, or the case is reported as Non-identified.',
-    rows: [
-      {
-        key: 'topclass_threshold',
-        label: 'TopClass threshold',
-        help: 'Every class at or below this value gives Non-identified.',
-      },
-    ],
-  },
-  {
-    title: 'PD source cascade',
-    hint: 'Turns the winning class into a PD source, and decides whether that is a strong rule.',
-    rows: [
-      {
-        key: 'joint_dual_threshold',
-        label: 'Joint dual threshold',
-        help: 'Surface and Internal both above this give Terminations / Joint.',
-      },
-      {
-        key: 'strong_rule_threshold',
-        label: 'Strong rule threshold',
-        help: 'A single class above this is trusted without manual confirmation.',
-      },
-    ],
-  },
-  {
-    title: 'Severity bands',
-    hint: 'Converts a measured gap-time into Initial, Moderate or High.',
-    rows: [
-      {
-        key: 'gap_time_high_ms',
-        label: 'High below',
-        help: 'Gap-time under this value is the most severe band.',
-      },
-      {
-        key: 'gap_time_moderate_ms',
-        label: 'Moderate up to',
-        help: 'Gap-time above this value is the least severe band.',
-      },
-      {
-        key: 'cycle_time_ms',
-        label: 'Mains cycle',
-        help: 'One full cycle: 20 ms at 50 Hz, 16.67 ms at 60 Hz.',
-      },
-    ],
-  },
-  {
-    title: 'Internal sanity check',
-    hint: 'The confidence band in which an Internal result must also pass the quadrant check.',
-    rows: [
-      {
-        key: 'confidence_threshold',
-        label: 'Band lower bound',
-        help: 'Also the threshold used by the legacy Strict and SMART prototype modes.',
-      },
-      {
-        key: 'internal_high_confidence',
-        label: 'Band upper bound',
-        help: 'Above this, an Internal result is trusted without the quadrant check.',
-      },
-    ],
-  },
-];
+import type { TrainedModel } from '@/lib/types';
 
 export default function SettingsPage() {
-  const { options, user, toast, refreshOptions } = useApp();
+  const { options, user, toast } = useApp();
 
-  const [thresholds, setThresholds] = useState<ThresholdSettings | null>(null);
-  const [draft, setDraft] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
+  // Models this account trained for itself, and which one analyses its cases.
+  const [models, setModels] = useState<TrainedModel[] | null>(null);
+  const [switching, setSwitching] = useState(false);
 
-  function applySettings(next: ThresholdSettings) {
-    setThresholds(next);
-    setDraft(
-      Object.fromEntries(Object.entries(next.effective).map(([k, v]) => [k, String(v)])),
-    );
-  }
-
-  useEffect(() => {
-    api
-      .getThresholds()
-      .then(applySettings)
-      .catch(() => setThresholds(null));
+  const loadModels = useCallback(async () => {
+    try {
+      setModels(await api.listModels());
+    } catch {
+      setModels([]);
+    }
   }, []);
 
-  async function saveThresholds() {
-    if (!thresholds) return;
-    const payload: Record<string, number> = {};
-    for (const [key, raw] of Object.entries(draft)) {
-      const value = Number(raw);
-      if (raw.trim() === '' || Number.isNaN(value)) {
-        toast(`"${key}" is not a number`);
-        return;
-      }
-      payload[key] = value;
-    }
-    setSaving(true);
-    try {
-      applySettings(await api.saveThresholds(payload));
-      await refreshOptions();
-      toast('Thresholds saved for this account');
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Could not save thresholds');
-    } finally {
-      setSaving(false);
-    }
-  }
+  useEffect(() => {
+    void loadModels();
+  }, [loadModels]);
 
-  async function restoreDefaults() {
-    setSaving(true);
+  async function selectModel(model: TrainedModel | null) {
+    setSwitching(true);
     try {
-      applySettings(await api.resetThresholds());
-      await refreshOptions();
-      toast('Restored the published defaults');
+      if (model) await api.activateModel(model.id);
+      else await api.deactivateModels();
+      await loadModels();
+      toast(
+        model
+          ? `New cases will be analysed with ${model.name}`
+          : 'New cases will be analysed with the published models',
+      );
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Could not restore defaults');
+      toast(e instanceof Error ? e.message : 'Could not change the analysis model');
     } finally {
-      setSaving(false);
+      setSwitching(false);
     }
   }
 
@@ -140,6 +49,12 @@ export default function SettingsPage() {
 
   const ml = options.ml_status;
   const c = options.constants;
+
+  const selectable = (models ?? []).filter((m) => m.can_activate);
+  const unselectable = (models ?? []).filter(
+    (m) => m.status === 'completed' && !m.can_activate,
+  );
+  const selected = selectable.find((m) => m.is_active) ?? null;
 
   const yesNo = (v: boolean) => (
     <span className={`pill ${v ? 'pill-green' : 'pill-red'}`}>{v ? 'Available' : 'Missing'}</span>
@@ -188,6 +103,92 @@ export default function SettingsPage() {
 
       <div className="card">
         <h2>
+          Analysis Model{' '}
+          <span className="text-[11px] font-medium text-slate-400">this account only</span>
+        </h2>
+        <p className="hint">
+          Which model classifies your cases. Models you build on the Model Training page appear
+          here, and are visible to your account alone. Changing this takes effect the next time a
+          case is analysed; cases already signed off keep the model they were scored with until you
+          re-run them.
+        </p>
+
+        {models === null ? (
+          <Spinner label="Loading your models…" />
+        ) : (
+          <div className="space-y-[10px]">
+            <label className={`consent-item ${selected === null ? 'checked' : ''}`}>
+              <input
+                type="radio"
+                name="analysis-model"
+                checked={selected === null}
+                disabled={switching}
+                onChange={() => void selectModel(null)}
+              />
+              <span>
+                <span className="lbl">Published models (default)</span>
+                <span className="desc">
+                  Model 2 (PRPD_2_Only) for PRPD-only cases and Model 3 (PRPD_3_Hybrid) when a T-F
+                  map is uploaded, as exported from Colab.
+                </span>
+              </span>
+            </label>
+
+            {selectable.map((m) => (
+              <label
+                key={m.id}
+                className={`consent-item ${m.is_active ? 'checked' : ''}`}
+              >
+                <input
+                  type="radio"
+                  name="analysis-model"
+                  checked={m.is_active}
+                  disabled={switching}
+                  onChange={() => void selectModel(m)}
+                />
+                <span>
+                  <span className="lbl">
+                    {m.name}{' '}
+                    <span className="text-[11px] font-medium text-slate-400">
+                      {m.kind_label}
+                    </span>
+                  </span>
+                  <span className="desc">
+                    {m.accuracy}% accuracy on {m.dataset_size} sample(s), trained{' '}
+                    {fmtDate(m.finished_at)}. Used when a case matches its input mode
+                    {m.kind === 'hybrid'
+                      ? ' (PRPD with a T-F map); PRPD-only cases fall back to Model 2.'
+                      : ' (PRPD alone); cases with a T-F map fall back to Model 3.'}
+                    {!m.uses_published_classes && (
+                      <>
+                        {' '}
+                        Predicts <b>{m.class_names.join(', ')}</b>, reported as{' '}
+                        {m.class_names.map((c) => m.pd_sources[c]).join(', ')}.
+                      </>
+                    )}
+                  </span>
+                </span>
+              </label>
+            ))}
+
+            {selectable.length === 0 && (
+              <p className="mt-[10px] text-[12.5px] text-slate-400">
+                You have not trained a selectable model yet.{' '}
+                {unselectable.length > 0 && (
+                  <>
+                    {unselectable.length} completed run(s) cannot be selected, because they were
+                    simulated and produced no model file.{' '}
+                  </>
+                )}
+                Build one on the <b>Model Training</b> page.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <h2>
           Decision Thresholds{' '}
           <span className="text-[11px] font-medium text-slate-400">this account only</span>
         </h2>
@@ -196,121 +197,7 @@ export default function SettingsPage() {
           apply to your account alone and take effect the next time a case is analysed. Cases
           already signed off keep the values they were scored with until you re-run them.
         </p>
-
-        {!thresholds ? (
-          <Spinner label="Loading thresholds…" />
-        ) : (
-          <>
-            <div className="callout callout-slate mb-[16px]">
-              <b className="mb-[6px] block text-slate-700">With your current values</b>
-              <ul className="help-bullets">
-                <li>
-                  All three classes at or below{' '}
-                  <b>{draft.topclass_threshold || thresholds.effective.topclass_threshold}%</b> give
-                  Non-identified.
-                </li>
-                <li>
-                  Corona above{' '}
-                  <b>
-                    {draft.strong_rule_threshold || thresholds.effective.strong_rule_threshold}%
-                  </b>{' '}
-                  gives Floating / Corona / Bad contact as a strong rule.
-                </li>
-                <li>
-                  Surface and Internal both above{' '}
-                  <b>{draft.joint_dual_threshold || thresholds.effective.joint_dual_threshold}%</b>{' '}
-                  give Terminations / Joint.
-                </li>
-                <li>
-                  For Corona or Surface, gap-time under{' '}
-                  <b>{draft.gap_time_high_ms || thresholds.effective.gap_time_high_ms} ms</b> is
-                  High, and above{' '}
-                  <b>
-                    {draft.gap_time_moderate_ms || thresholds.effective.gap_time_moderate_ms} ms
-                  </b>{' '}
-                  is Initial.
-                </li>
-              </ul>
-            </div>
-
-            {THRESHOLD_GROUPS.map((group) => (
-              <div key={group.title} className="mb-[18px]">
-                <label className="field-label mb-[2px] block">{group.title}</label>
-                <p className="mb-[10px] mt-0 text-[11.5px] text-slate-400">{group.hint}</p>
-                <table className="data">
-                  <thead>
-                    <tr>
-                      <th>Threshold</th>
-                      <th className="w-[130px]">Value</th>
-                      <th className="w-[90px]">Default</th>
-                      <th>What it does</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {group.rows.map(({ key, label, help }) => {
-                      const bound = thresholds.bounds[key];
-                      const changed = String(thresholds.defaults[key]) !== String(draft[key] ?? '');
-                      return (
-                        <tr key={key}>
-                          <td>
-                            {label}
-                            {changed && <span className="pill pill-amber ml-2">changed</span>}
-                          </td>
-                          <td>
-                            <div className="flex items-center gap-[6px]">
-                              <input
-                                type="number"
-                                step="0.01"
-                                min={bound.min}
-                                max={bound.max}
-                                value={draft[key] ?? ''}
-                                onChange={(e) =>
-                                  setDraft((d) => ({ ...d, [key]: e.target.value }))
-                                }
-                                className="w-[78px]"
-                              />
-                              <span className="text-[11.5px] text-slate-400">{bound.unit}</span>
-                            </div>
-                          </td>
-                          <td className="text-[12px] text-slate-400">
-                            {thresholds.defaults[key]} {bound.unit}
-                          </td>
-                          <td className="text-[11.5px] text-slate-500">{help}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ))}
-
-            <div className="flex flex-wrap items-center gap-[10px]">
-              <button
-                className="btn btn-blue"
-                type="button"
-                disabled={saving}
-                onClick={() => void saveThresholds()}
-              >
-                Save thresholds
-              </button>
-              <button
-                className="btn btn-outline"
-                type="button"
-                disabled={saving || thresholds.overridden.length === 0}
-                onClick={() => void restoreDefaults()}
-              >
-                Restore published defaults
-              </button>
-              <span className="text-[11.5px] text-slate-400">
-                {thresholds.overridden.length === 0
-                  ? 'Using the published CMD FINAL V2 values.'
-                  : `${thresholds.overridden.length} value${
-                      thresholds.overridden.length === 1 ? '' : 's'
-                    } differ from the published defaults.`}
-              </span>
-            </div>
-          </>
-        )}
+        <ThresholdsPanel />
       </div>
 
       <div className="card">

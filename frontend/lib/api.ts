@@ -1,14 +1,21 @@
 import type {
+  Backbone,
   BatchSummary,
   CalibrationPreset,
+  ClassSpec,
   CaseOptions,
   DashboardData,
+  DatasetSplit,
+  DatasetUploadResult,
   DecisionMode,
   EditHistoryEntry,
+  ModelKind,
   PdCase,
   PointsResponse,
   ReviewStatus,
   ThresholdSettings,
+  TrainedModel,
+  TrainedModelDetail,
   TrainingStats,
   UsageEntry,
 } from './types';
@@ -276,6 +283,54 @@ export const api = {
     request<{ reviewed_cases: number; all_cases: number; edit_history_entries: number }>(
       '/export/counts',
     ),
+
+  // ---- model training (per account) ----
+  listModels: () => request<TrainedModel[]>('/training/models'),
+
+  getModel: (id: number) => request<TrainedModelDetail>(`/training/models/${id}`),
+
+  createModel: (payload: {
+    name: string;
+    kind: ModelKind;
+    classes: ClassSpec[];
+    max_epochs: number;
+    batch_size: number;
+    learning_rate: number;
+    backbone: Backbone;
+    data_consent: boolean;
+  }) =>
+    request<TrainedModelDetail>('/training/models', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  uploadTrainingData: (id: number, split: DatasetSplit, className: string, files: File[]) => {
+    const form = new FormData();
+    form.set('split', split);
+    form.set('class_name', className);
+    files.forEach((f) => form.append('files', f));
+    return request<DatasetUploadResult>(`/training/models/${id}/data`, {
+      method: 'POST',
+      body: form,
+    });
+  },
+
+  clearTrainingData: (id: number, split: DatasetSplit, className: string) =>
+    request<Omit<DatasetUploadResult, 'accepted' | 'rejected'>>(
+      `/training/models/${id}/data?split=${split}&class_name=${encodeURIComponent(className)}`,
+      { method: 'DELETE' },
+    ),
+
+  startTraining: (id: number) =>
+    request<TrainedModelDetail>(`/training/models/${id}/train`, { method: 'POST' }),
+
+  activateModel: (id: number) =>
+    request<TrainedModel>(`/training/models/${id}/activate`, { method: 'POST' }),
+
+  deactivateModels: () =>
+    request<{ ok: boolean }>('/training/models/deactivate', { method: 'POST' }),
+
+  deleteModel: (id: number) => request<void>(`/training/models/${id}`, { method: 'DELETE' }),
 
   // ---- exports ----
   exportMaster: (includePending = false) =>

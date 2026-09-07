@@ -18,13 +18,20 @@
 *.sqlite
 *.sqlite3
 *.sql
+# Copies taken before a migration carry the same hashes as the original, and
+# "*.db" does not match "dev.db.bak".
+*.bak
+*.dump
+*-journal
 backend/storage/
 
 # ---------------------------------------------------------------
 # Trained models
 # ---------------------------------------------------------------
 # Mounted in from MODELS_HOST_DIR at runtime; far too large for git.
-models/
+# Anchored to the repo root on purpose: an unanchored "models/" also matches
+# backend/app/models/, which is the ORM package and must be committed.
+/models/
 *.keras
 *.h5
 

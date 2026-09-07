@@ -7,6 +7,7 @@ calibration (preset / default 388x281 / auto contour) -> suggest gap lines
 
 from __future__ import annotations
 
+import json
 import math
 from datetime import datetime
 from typing import Any
@@ -23,6 +24,7 @@ from app.models.entities import (
     CalibrationPreset,
     Case,
     EditHistory,
+    TrainedModel,
     UsageLog,
     User,
     UserThreshold,
@@ -60,6 +62,63 @@ def thresholds_for(db: Session, user_id: int | None) -> rules.Thresholds:
 def thresholds_for_case(db: Session, case: Case) -> rules.Thresholds:
     """A case is always scored with the thresholds of the account that owns it."""
     return thresholds_for(db, case.owner_id)
+
+
+# =========================================================================
+# PER-ACCOUNT TRAINED MODEL
+# =========================================================================
+def active_model_for(db: Session, user_id: int | None) -> dict[str, Any] | None:
+    """The trained model this account has selected for analysis, if any.
+
+    Returns None, meaning "use the published Colab models", unless the account
+    has an active run that finished and produced a real .keras artifact. A
+    simulated run has no artifact, so selecting one never silently changes how
+    a case is scored.
+
+    The returned dict carries the model's class scheme, so a model predicting
+    its own class set is interpreted through its own PD source and severity
+    mapping rather than the published one.
+    """
+    if user_id is None:
+        return None
+
+    row = db.scalar(
+        select(TrainedModel).where(
+            TrainedModel.owner_id == user_id,
+            TrainedModel.is_active.is_(True),
+            TrainedModel.status == "completed",
+        )
+    )
+    if row is None or not row.artifact_path:
+        return None
+
+    return {
+        "name": row.name,
+        "kind": row.kind,
+        "path": row.artifact_path,
+        "scheme": scheme_from_model(row),
+    }
+
+
+def scheme_from_model(row: TrainedModel) -> rules.ClassScheme:
+    """The rule-engine scheme a trained model's outputs should be read through."""
+    return rules.ClassScheme.from_dict(
+        {
+            "class_names": json.loads(row.class_names or "[]"),
+            "pd_sources": json.loads(row.pd_sources or "{}"),
+            "severity_groups": json.loads(row.severity_groups or "{}"),
+        }
+    )
+
+
+def scheme_for_case(case: Case) -> rules.ClassScheme:
+    """The scheme a case was scored with, defaulting to the published one."""
+    if not case.class_scheme:
+        return rules.DEFAULT_SCHEME
+    try:
+        return rules.ClassScheme.from_dict(json.loads(case.class_scheme))
+    except (ValueError, TypeError):
+        return rules.DEFAULT_SCHEME
 
 
 # =========================================================================
@@ -235,8 +294,17 @@ def run_analysis(db: Session, case: Case, decision_mode: str | None = None) -> C
     # ---- 2. classification ----
     thresholds = thresholds_for_case(db, case)
 
-    prediction = ml.classify(prpd_rgb, tf_rgb)
+    active = active_model_for(db, case.owner_id)
+    prediction = ml.classify(prpd_rgb, tf_rgb, active)
     scores = prediction["scores_percent"]
+    # A case is read through the scheme of the model that actually ran. When
+    # the account's model was skipped (wrong input mode, missing file) the
+    # published model produced these scores, so the published scheme applies.
+    scheme = (
+        active["scheme"]
+        if active is not None and prediction["engine"] == "real" and prediction["used_custom"]
+        else rules.DEFAULT_SCHEME
+    )
 
     ai = rules.build_ai_result(
         scores_percent=scores,
@@ -245,11 +313,12 @@ def run_analysis(db: Session, case: Case, decision_mode: str | None = None) -> C
         model_path=prediction["model_path"],
         decision_mode=mode,
         thresholds=thresholds,
+        scheme=scheme,
     )
 
     # ---- 3. internal sanity check (85-95% Internal band) ----
     sanity = None
-    if rules.should_run_internal_sanity_check(scores, thresholds):
+    if rules.should_run_internal_sanity_check(scores, thresholds, scheme):
         sanity = detect.internal_sanity_check(prpd_rgb)
         case.sanity_check_ran = True
         case.sanity_check_passed = sanity["internal_ok"]
@@ -257,7 +326,7 @@ def run_analysis(db: Session, case: Case, decision_mode: str | None = None) -> C
         case.sanity_lower_ratio = sanity["lower_ratio"]
         case.sanity_left_ratio = sanity["left_ratio"]
         case.sanity_right_ratio = sanity["right_ratio"]
-        ai = rules.apply_internal_sanity_override(ai, sanity)
+        ai = rules.apply_internal_sanity_override(ai, sanity, scheme)
     else:
         case.sanity_check_ran = False
         case.sanity_check_passed = None
@@ -277,9 +346,14 @@ def run_analysis(db: Session, case: Case, decision_mode: str | None = None) -> C
     case.ai_non_identified_percent = ai["non_identified_percent"]
     case.ai_decision_rule = ai["ai_decision_rule"]
     case.ai_threshold_percent = ai["ai_threshold_percent"]
-    case.ai_confidence_corona = ai["confidence_dict"]["Corona"]
-    case.ai_confidence_surface = ai["confidence_dict"]["Surface"]
-    case.ai_confidence_internal = ai["confidence_dict"]["Internal"]
+    confidences = ai["confidence_dict"]
+    case.ai_confidence_corona = confidences.get("Corona")
+    case.ai_confidence_surface = confidences.get("Surface")
+    case.ai_confidence_internal = confidences.get("Internal")
+    case.ai_confidence_json = json.dumps(confidences)
+    case.class_scheme = (
+        None if scheme is rules.DEFAULT_SCHEME else json.dumps(scheme.to_dict())
+    )
     case.pd_rule_class = ai["pd_rule_class"]
     case.pd_selection_rule = ai["pd_selection_rule"]
     case.is_strong_pd_rule = ai["is_strong_pd_rule"]
@@ -422,6 +496,7 @@ def recompute_gap(db: Session, case: Case) -> dict[str, Any]:
         not_measurable=bool(case.auto_not_measurable_recommended)
         and case.review_status == "not_measurable",
         thresholds=thresholds_for_case(db, case),
+        scheme=scheme_for_case(case),
     )
 
     case.left_phase_deg = metrics["left_phase_deg"]
@@ -483,6 +558,15 @@ def serialize_case(case: Case, *, include_detail: bool = False) -> dict[str, Any
         "ai_non_identified_percent": _num(case.ai_non_identified_percent),
         "ai_decision_rule": case.ai_decision_rule,
         "ai_threshold_percent": _num(case.ai_threshold_percent, 1),
+        # The three published classes stay as named fields so existing screens
+        # keep working; `class_confidences` carries every class of whatever
+        # scheme scored the case, in the scheme's own order.
+        "class_names": scheme_for_case(case).class_names,
+        "class_confidences": (
+            {k: _num(v) for k, v in json.loads(case.ai_confidence_json).items()}
+            if case.ai_confidence_json
+            else None
+        ),
         "confidence": {
             "corona": _num(case.ai_confidence_corona),
             "surface": _num(case.ai_confidence_surface),
@@ -532,7 +616,9 @@ def serialize_case(case: Case, *, include_detail: bool = False) -> dict[str, Any
             "negative_x_range_pixel": case.negative_x_range_pixel,
         },
         "severity_by_gap_time": case.severity_by_gap_time,
-        "severity_group": rules.severity_group_label(case.confirmed_pd_source_type),
+        "severity_group": rules.severity_group_label(
+            case.confirmed_pd_source_type, scheme_for_case(case)
+        ),
         "review_status": case.review_status,
         "reviewer_name": case.reviewer_name,
         "reviewer_role": case.reviewer_role,

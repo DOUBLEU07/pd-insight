@@ -18,7 +18,6 @@ from app.models.entities import (
     CalibrationPreset,
     Case,
     EditHistory,
-    TrainingRun,
     UsageLog,
     User,
     UserThreshold,
@@ -423,7 +422,7 @@ def delete_preset(
 
 
 # =========================================================================
-# USAGE LOG / EDIT HISTORY / TRAINING
+# USAGE LOG / EDIT HISTORY
 # =========================================================================
 @router.get("/usage-log")
 def usage_log(
@@ -476,48 +475,6 @@ def edit_history(
         }
         for r in rows
     ]
-
-
-@router.get("/training/stats")
-def training_stats(
-    db: Session = Depends(get_db), user: User = Depends(get_current_user)
-) -> dict[str, Any]:
-    """Read-only stats for the Model Training page.
-
-    Training itself is deliberately not implemented yet. The page shows what
-    a future run would draw on.
-    """
-    reviewed = (
-        db.scalar(
-            select(func.count(Case.id)).where(
-                Case.status == "done", Case.owner_id == user.id
-            )
-        )
-        or 0
-    )
-    usage_count = (
-        db.scalar(select(func.count(UsageLog.id)).where(UsageLog.username == user.username)) or 0
-    )
-    runs = db.scalars(select(TrainingRun).order_by(desc(TrainingRun.started_at))).all()
-
-    return {
-        "reviewed_cases": reviewed,
-        "training_runs": len(runs),
-        "usage_events": usage_count,
-        "username": user.username,
-        "enabled": False,
-        "message": "Model training is not enabled in this build.",
-        "history": [
-            {
-                "started_at": r.started_at.isoformat() if r.started_at else None,
-                "username": r.username,
-                "dataset_size": r.dataset_size,
-                "accuracy": r.accuracy,
-                "note": r.note,
-            }
-            for r in runs
-        ],
-    }
 
 
 @router.get("/system/status")
