@@ -699,6 +699,11 @@
   .modal-card {
     @apply flex max-h-[calc(100vh-64px)] w-[620px] max-w-full flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-popover;
   }
+  /* The training wizard carries a per-class dataset grid, which does not fit
+     the 620px consent dialog. */
+  .modal-card-wide {
+    @apply w-[880px];
+  }
   .modal-head {
     @apply border-b border-slate-100 px-[26px] pb-[15px] pt-[22px];
   }
@@ -725,6 +730,47 @@
   }
   .consent-item .desc {
     @apply block text-[11.5px] leading-[1.5] text-slate-500;
+  }
+
+  /* ---------- TRAINING DATASET GRID ---------- */
+  .dataset-row {
+    @apply mb-[10px] rounded-lg border border-slate-200 bg-white p-[13px];
+  }
+  .dataset-row-head {
+    @apply mb-[10px] flex items-center justify-between gap-3;
+  }
+  .dataset-splits {
+    @apply grid gap-[10px];
+    grid-template-columns: repeat(3, 1fr);
+  }
+  @media (max-width: 760px) {
+    .dataset-splits {
+      grid-template-columns: 1fr;
+    }
+  }
+  .split-slot {
+    @apply cursor-pointer rounded-md border-[1.5px] border-dashed border-slate-300 bg-slate-50 px-3 py-[10px] text-center transition-colors hover:border-brand-400 hover:bg-brand-50;
+  }
+  .split-slot.filled {
+    @apply border-solid border-emerald-200 bg-emerald-50;
+  }
+  .split-slot .lbl {
+    @apply text-[10.5px] font-semibold uppercase tracking-[.03em] text-slate-400;
+  }
+  .split-slot .val {
+    @apply mt-[2px] text-[17px] font-bold text-slate-900;
+  }
+  .split-slot.filled .val {
+    @apply text-emerald-700;
+  }
+  .split-slot .sub {
+    @apply mt-px text-[10.5px] text-slate-400;
+  }
+  .train-progress-bg {
+    @apply h-2 w-full overflow-hidden rounded-full bg-slate-100;
+  }
+  .train-progress-fill {
+    @apply h-full rounded-full bg-brand-500 transition-[width] duration-500;
   }
 
   /* ---------- TOAST ---------- */

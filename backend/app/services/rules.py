@@ -68,87 +68,204 @@ def _t(thresholds: Thresholds | None) -> Thresholds:
 
 
 # =========================================================================
+# CLASS SCHEME
+# =========================================================================
+# The rules above were written against exactly three classes. An account that
+# trains its own model may name a different set (add "Void", drop "Internal"),
+# and the cascade still has to turn whatever wins into a PD source and a
+# severity. A scheme carries that mapping, and `DEFAULT_SCHEME` reproduces
+# CMD FINAL V2 exactly, so anything scored without one is unaffected.
+DEFAULT_PD_SOURCES: dict[str, str] = {
+    "Corona": "Floating / Corona / Bad contact",
+    "Surface": "Outside surface discharge",
+    "Internal": "Internal",
+}
+
+# Severity is keyed by PD source, not by class, because the reviewer may
+# confirm a different source than the model suggested and the bands have to
+# follow their answer.
+#   1 = gap-time splits Initial / Moderate / High
+#   2 = gap-time splits Moderate / High only
+DEFAULT_SEVERITY_GROUPS: dict[str, int] = {
+    "Floating / Corona / Bad contact": 1,
+    "Outside surface discharge": 1,
+    "Terminations / Joint": 2,
+    "Internal": 2,
+}
+
+# The published wording for the two severity groups. A custom scheme derives
+# its own labels from its class names.
+DEFAULT_GROUP_LABELS: dict[int, str] = {
+    1: "Group 1: Corona / Surface",
+    2: "Group 2: Joint / Internal",
+}
+
+UNKNOWN_PD_SOURCE = "Manual confirmation required"
+JOINT_PD_SOURCE = "Terminations / Joint"
+
+# The pair rule and the quadrant sanity check name specific classes. They stay
+# switched on for any scheme that still contains those classes, and switch
+# themselves off for one that does not, rather than misfiring on a class that
+# happens to sit in the same position.
+DUAL_RULE_PAIR = ("Surface", "Internal")
+SANITY_CHECK_CLASS = "Internal"
+
+
+@dataclass
+class ClassScheme:
+    """What a model's output classes mean to the rule engine."""
+
+    class_names: list[str]
+    # class -> PD source label shown to the reviewer.
+    pd_sources: dict[str, str]
+    # PD source label -> severity group (1 or 2).
+    severity_groups: dict[str, int]
+    # severity group -> the wording shown on the dashboard.
+    group_labels: dict[int, str]
+
+    @classmethod
+    def default(cls) -> ClassScheme:
+        return cls(
+            class_names=list(CLASS_NAMES),
+            pd_sources=dict(DEFAULT_PD_SOURCES),
+            severity_groups=dict(DEFAULT_SEVERITY_GROUPS),
+            group_labels=dict(DEFAULT_GROUP_LABELS),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "class_names": list(self.class_names),
+            "pd_sources": dict(self.pd_sources),
+            "severity_groups": dict(self.severity_groups),
+            "group_labels": {str(k): v for k, v in self.group_labels.items()},
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any] | None) -> ClassScheme:
+        """Rebuild a scheme, falling back to the published one when absent."""
+        if not raw or not raw.get("class_names"):
+            return cls.default()
+        names = [str(n) for n in raw["class_names"]]
+        sources = {str(k): str(v) for k, v in (raw.get("pd_sources") or {}).items()}
+        groups = {str(k): int(v) for k, v in (raw.get("severity_groups") or {}).items()}
+        # A class with no mapping still has to produce something coherent.
+        for name in names:
+            sources.setdefault(name, DEFAULT_PD_SOURCES.get(name, UNKNOWN_PD_SOURCE))
+        for source in sources.values():
+            groups.setdefault(source, DEFAULT_SEVERITY_GROUPS.get(source, 1))
+        groups.setdefault(JOINT_PD_SOURCE, DEFAULT_SEVERITY_GROUPS[JOINT_PD_SOURCE])
+
+        labels = {int(k): str(v) for k, v in (raw.get("group_labels") or {}).items()}
+        if not labels:
+            labels = _derive_group_labels(names, sources, groups)
+
+        return cls(
+            class_names=names,
+            pd_sources=sources,
+            severity_groups=groups,
+            group_labels=labels,
+        )
+
+    def source_for(self, class_name: str) -> str:
+        return self.pd_sources.get(class_name, UNKNOWN_PD_SOURCE)
+
+    @property
+    def dual_pair(self) -> tuple[str, str] | None:
+        """The two classes whose joint high confidence means Terminations / Joint."""
+        first, second = DUAL_RULE_PAIR
+        if first in self.class_names and second in self.class_names:
+            return first, second
+        return None
+
+    @property
+    def sanity_class(self) -> str | None:
+        """The class the PRPD quadrant sanity check applies to, if present."""
+        return SANITY_CHECK_CLASS if SANITY_CHECK_CLASS in self.class_names else None
+
+
+def _derive_group_labels(
+    class_names: list[str], sources: dict[str, str], groups: dict[str, int]
+) -> dict[int, str]:
+    """Name each severity group after the classes that land in it."""
+    labels: dict[int, str] = {}
+    for group in sorted({g for g in groups.values()}):
+        members = [name for name in class_names if groups.get(sources.get(name, "")) == group]
+        if group == 2 and groups.get(JOINT_PD_SOURCE) == 2:
+            members = ["Joint", *members]
+        labels[group] = f"Group {group}: {' / '.join(members)}" if members else f"Group {group}"
+    return labels
+
+
+DEFAULT_SCHEME = ClassScheme.default()
+
+
+def _s(scheme: ClassScheme | None) -> ClassScheme:
+    return scheme or DEFAULT_SCHEME
+
+
+# =========================================================================
 # PD SOURCE
 # =========================================================================
-def map_class_to_pd_source(class_name: str) -> str:
-    if class_name == "Corona":
-        return "Floating / Corona / Bad contact"
-    if class_name == "Surface":
-        return "Outside surface discharge"
-    if class_name == "Internal":
-        return "Internal"
-    return "Manual confirmation required"
+def map_class_to_pd_source(class_name: str, scheme: ClassScheme | None = None) -> str:
+    return _s(scheme).source_for(class_name)
 
 
 def select_pd_source_by_confidence(
-    corona_pct: float,
-    surface_pct: float,
-    internal_pct: float,
+    scores: dict[str, float],
     thresholds: Thresholds | None = None,
+    scheme: ClassScheme | None = None,
 ) -> dict[str, Any]:
-    """Five-rule priority cascade (CMD FINAL CODE)."""
+    """Priority cascade (CMD FINAL CODE), generalised over a scheme's classes.
+
+    With the published three classes this is the original five rules in the
+    original order: the Surface+Internal pair rule, then Corona, Surface and
+    Internal each against the strong threshold, then the top-class fallback.
+    A scheme with different classes keeps the same shape — pair rule first if
+    it still applies, then every class in the scheme's own order.
+    """
     t = _t(thresholds)
+    sch = _s(scheme)
     dual = t.joint_dual_threshold
     strong = t.strong_rule_threshold
 
-    scores = {
-        "Corona": float(corona_pct),
-        "Surface": float(surface_pct),
-        "Internal": float(internal_pct),
-    }
+    values = {name: float(scores.get(name, 0.0)) for name in sch.class_names}
 
-    if scores["Surface"] > dual and scores["Internal"] > dual:
+    pair = sch.dual_pair
+    if pair and values[pair[0]] > dual and values[pair[1]] > dual:
         return {
             "pd_rule_class": "Joint",
-            "pd_source_type": "Terminations / Joint",
-            "pd_selection_rule": f"surface_gt_{dual:g}_and_internal_gt_{dual:g}",
+            "pd_source_type": JOINT_PD_SOURCE,
+            "pd_selection_rule": (
+                f"{pair[0].lower()}_gt_{dual:g}_and_{pair[1].lower()}_gt_{dual:g}"
+            ),
             "is_strong_rule": True,
             "requires_manual_confirmation": False,
             "rule_no": 1,
         }
 
-    if scores["Corona"] > strong:
-        return {
-            "pd_rule_class": "Corona",
-            "pd_source_type": "Floating / Corona / Bad contact",
-            "pd_selection_rule": f"corona_gt_{strong:g}",
-            "is_strong_rule": True,
-            "requires_manual_confirmation": False,
-            "rule_no": 2,
-        }
+    for index, name in enumerate(sch.class_names):
+        if values[name] > strong:
+            return {
+                "pd_rule_class": name,
+                "pd_source_type": sch.source_for(name),
+                "pd_selection_rule": f"{name.lower()}_gt_{strong:g}",
+                "is_strong_rule": True,
+                "requires_manual_confirmation": False,
+                "rule_no": index + 2,
+            }
 
-    if scores["Surface"] > strong:
-        return {
-            "pd_rule_class": "Surface",
-            "pd_source_type": "Outside surface discharge",
-            "pd_selection_rule": f"surface_gt_{strong:g}",
-            "is_strong_rule": True,
-            "requires_manual_confirmation": False,
-            "rule_no": 3,
-        }
-
-    if scores["Internal"] > strong:
-        return {
-            "pd_rule_class": "Internal",
-            "pd_source_type": "Internal",
-            "pd_selection_rule": f"internal_gt_{strong:g}",
-            "is_strong_rule": True,
-            "requires_manual_confirmation": False,
-            "rule_no": 4,
-        }
-
-    top_class = max(scores, key=lambda k: scores[k])
-    top_score = scores[top_class]
+    top_class = max(values, key=lambda k: values[k])
+    top_score = values[top_class]
 
     return {
         "pd_rule_class": top_class,
-        "pd_source_type": map_class_to_pd_source(top_class),
+        "pd_source_type": sch.source_for(top_class),
         "pd_selection_rule": (
             f"top_class_fallback_{top_class.lower()}_{top_score:.2f}_manual_confirm"
         ),
         "is_strong_rule": False,
         "requires_manual_confirmation": True,
-        "rule_no": 5,
+        "rule_no": len(sch.class_names) + 2,
     }
 
 
@@ -165,20 +282,17 @@ _NON_IDENTIFIED_PD_RULE = {
 # =========================================================================
 # CLASSIFICATION DECISION
 # =========================================================================
-def _decide_topclass30(scores: dict[str, float], t: Thresholds) -> dict[str, Any]:
+def _decide_topclass30(
+    scores: dict[str, float], t: Thresholds, sch: ClassScheme
+) -> dict[str, Any]:
     """CMD FINAL CODE `build_ai_result`, the production rule.
 
-    All three classes <= 30% => Non-identified; otherwise the top class wins.
+    Every class <= 30% => Non-identified; otherwise the top class wins.
     """
-    corona, surface, internal = scores["Corona"], scores["Surface"], scores["Internal"]
     top_class = max(scores, key=lambda k: scores[k])
     top_score = scores[top_class]
 
-    all_low = (
-        corona <= t.topclass_threshold
-        and surface <= t.topclass_threshold
-        and internal <= t.topclass_threshold
-    )
+    all_low = all(v <= t.topclass_threshold for v in scores.values())
 
     if all_low:
         return {
@@ -198,13 +312,15 @@ def _decide_topclass30(scores: dict[str, float], t: Thresholds) -> dict[str, Any
         "status": f"identified_by_top_class_gt_{t.topclass_threshold:g}",
         "non_identified_percent": 0.0,
         "high_conf_count": sum(1 for v in scores.values() if v > t.topclass_threshold),
-        "pd_rule": select_pd_source_by_confidence(corona, surface, internal, t),
+        "pd_rule": select_pd_source_by_confidence(scores, t, sch),
         "decision_rule": f"top_class_gt_{t.topclass_threshold:g}_else_non_identified",
         "threshold": t.topclass_threshold,
     }
 
 
-def _decide_strict85(scores: dict[str, float], t: Thresholds) -> dict[str, Any]:
+def _decide_strict85(
+    scores: dict[str, float], t: Thresholds, sch: ClassScheme
+) -> dict[str, Any]:
     """Prototype Mode A / PRPD_2_Only Part 5.
 
     Exactly one class must reach 85%. Zero or two-plus => Non-identified, and
@@ -216,14 +332,13 @@ def _decide_strict85(scores: dict[str, float], t: Thresholds) -> dict[str, Any]:
     high_conf = [c for c, v in scores.items() if v >= t.confidence_threshold]
 
     if len(high_conf) == 1:
-        corona, surface, internal = scores["Corona"], scores["Surface"], scores["Internal"]
         return {
             "final_result": high_conf[0],
             "final_score": scores[high_conf[0]],
             "status": "identified",
             "non_identified_percent": 0.0,
             "high_conf_count": 1,
-            "pd_rule": select_pd_source_by_confidence(corona, surface, internal, t),
+            "pd_rule": select_pd_source_by_confidence(scores, t, sch),
             "decision_rule": f"exactly_one_class_ge_{t.confidence_threshold:.0f}",
             "threshold": t.confidence_threshold,
         }
@@ -242,7 +357,9 @@ def _decide_strict85(scores: dict[str, float], t: Thresholds) -> dict[str, Any]:
     }
 
 
-def _decide_loose30(scores: dict[str, float], t: Thresholds) -> dict[str, Any]:
+def _decide_loose30(
+    scores: dict[str, float], t: Thresholds, sch: ClassScheme
+) -> dict[str, Any]:
     """Prototype Mode B: top class only needs to exceed 30%."""
     top_class = max(scores, key=lambda k: scores[k])
     top_score = scores[top_class]
@@ -259,26 +376,26 @@ def _decide_loose30(scores: dict[str, float], t: Thresholds) -> dict[str, Any]:
             "threshold": t.topclass_threshold,
         }
 
-    corona, surface, internal = scores["Corona"], scores["Surface"], scores["Internal"]
     return {
         "final_result": top_class,
         "final_score": top_score,
         "status": "identified_loose",
         "non_identified_percent": 0.0,
         "high_conf_count": sum(1 for v in scores.values() if v > t.topclass_threshold),
-        "pd_rule": select_pd_source_by_confidence(corona, surface, internal, t),
+        "pd_rule": select_pd_source_by_confidence(scores, t, sch),
         "decision_rule": f"top_class_gt_{t.topclass_threshold:.0f}_threshold_85_not_enforced",
         "threshold": t.topclass_threshold,
     }
 
 
-def _decide_smart_hybrid(scores: dict[str, float], t: Thresholds) -> dict[str, Any]:
+def _decide_smart_hybrid(
+    scores: dict[str, float], t: Thresholds, sch: ClassScheme
+) -> dict[str, Any]:
     """Prototype Mode C / PRPD_3_Hybrid Part 6 SMART FINAL RESULT.
 
     0 classes over 85% => Inconclusive, 1 => that class, 2+ => Mixed PD Suspected.
     """
     over = [c for c, v in scores.items() if v > t.confidence_threshold]
-    corona, surface, internal = scores["Corona"], scores["Surface"], scores["Internal"]
 
     if len(over) == 0:
         return {
@@ -299,7 +416,7 @@ def _decide_smart_hybrid(scores: dict[str, float], t: Thresholds) -> dict[str, A
             "status": "hybrid_identified",
             "non_identified_percent": 0.0,
             "high_conf_count": 1,
-            "pd_rule": select_pd_source_by_confidence(corona, surface, internal, t),
+            "pd_rule": select_pd_source_by_confidence(scores, t, sch),
             "decision_rule": f"smart_final_result_single_class_gt_{t.confidence_threshold:.0f}",
             "threshold": t.confidence_threshold,
         }
@@ -333,27 +450,35 @@ def build_ai_result(
     model_path: str,
     decision_mode: str = "topclass30",
     thresholds: Thresholds | None = None,
+    scheme: ClassScheme | None = None,
 ) -> dict[str, Any]:
     """Assemble the full AI result block for one case.
 
-    `scores_percent` is ordered as CLASS_NAMES = [Corona, Surface, Internal],
-    already scaled to percent.
+    `scores_percent` is ordered as the scheme's `class_names`, which defaults
+    to CLASS_NAMES = [Corona, Surface, Internal], already scaled to percent.
     """
     if decision_mode not in _DECIDERS:
         raise ValueError(f"unknown decision_mode: {decision_mode}")
 
     t = _t(thresholds)
+    sch = _s(scheme)
 
     values = [float(v) for v in scores_percent]
-    scores = {CLASS_NAMES[i]: values[i] for i in range(3)}
+    if len(values) != len(sch.class_names):
+        raise ValueError(
+            f"got {len(values)} scores for {len(sch.class_names)} classes "
+            f"({', '.join(sch.class_names)})"
+        )
+    scores = {name: values[i] for i, name in enumerate(sch.class_names)}
 
     top_class = max(scores, key=lambda k: scores[k])
     top_score = scores[top_class]
 
-    decision = _DECIDERS[decision_mode](scores, t)
+    decision = _DECIDERS[decision_mode](scores, t, sch)
     pd_rule = decision["pd_rule"]
 
     return {
+        "class_names": list(sch.class_names),
         "input_mode": input_mode,
         "model_used": model_used,
         "model_path_used": model_path,
@@ -379,18 +504,24 @@ def build_ai_result(
 
 
 def apply_internal_sanity_override(
-    ai: dict[str, Any], sanity: dict[str, Any] | None
+    ai: dict[str, Any],
+    sanity: dict[str, Any] | None,
+    scheme: ClassScheme | None = None,
 ) -> dict[str, Any]:
     """Internal safety rule from PRPD_2_Only.md Part 5.
 
     Runs only when the top class is Internal and its score sits in the
     85-95% band. A failed quadrant check forces Non-identified at 100%.
     Scores above 95% are trusted and only carry a TF recommendation.
+
+    A scheme without an Internal class never reaches the override, because
+    the quadrant ratios were derived for internal discharge specifically.
     """
     if sanity is None or not sanity.get("ran"):
         return ai
 
-    if ai["top_class"] != "Internal":
+    sanity_class = _s(scheme).sanity_class
+    if sanity_class is None or ai["top_class"] != sanity_class:
         return ai
 
     if sanity.get("internal_ok"):
@@ -414,15 +545,22 @@ def apply_internal_sanity_override(
 
 
 def should_run_internal_sanity_check(
-    scores_percent: list[float], thresholds: Thresholds | None = None
+    scores_percent: list[float],
+    thresholds: Thresholds | None = None,
+    scheme: ClassScheme | None = None,
 ) -> bool:
     """True when top class is Internal with confidence inside the sanity band."""
     t = _t(thresholds)
-    scores = {CLASS_NAMES[i]: float(scores_percent[i]) for i in range(3)}
+    sch = _s(scheme)
+    sanity_class = sch.sanity_class
+    if sanity_class is None:
+        return False
+
+    scores = {name: float(scores_percent[i]) for i, name in enumerate(sch.class_names)}
     top_class = max(scores, key=lambda k: scores[k])
     top_score = scores[top_class]
     return (
-        top_class == "Internal"
+        top_class == sanity_class
         and t.confidence_threshold <= top_score < t.internal_high_confidence
     )
 
@@ -453,27 +591,36 @@ def gap_time_band(gap_time_ms: float | None, thresholds: Thresholds | None = Non
     return f"< {t.gap_time_high_ms:g} ms"
 
 
-SEVERITY_GROUP_1 = ["Floating / Corona / Bad contact", "Outside surface discharge"]
-SEVERITY_GROUP_2 = ["Terminations / Joint", "Internal"]
+# Kept as the published lists so existing imports and the CSV exports read the
+# same. A custom scheme carries its own mapping in `severity_groups`.
+SEVERITY_GROUP_1 = [
+    source for source, group in DEFAULT_SEVERITY_GROUPS.items() if group == 1
+]
+SEVERITY_GROUP_2 = [
+    source for source, group in DEFAULT_SEVERITY_GROUPS.items() if group == 2
+]
 
 
 def severity_from_gap_time_and_source(
     gap_time_ms: float | None,
     pd_source_type: str | None,
     thresholds: Thresholds | None = None,
+    scheme: ClassScheme | None = None,
 ) -> str:
     t = _t(thresholds)
     if gap_time_ms is None or (isinstance(gap_time_ms, float) and math.isnan(gap_time_ms)):
         return "Not measurable"
 
-    if pd_source_type in SEVERITY_GROUP_1:
+    group = _s(scheme).severity_groups.get(pd_source_type or "")
+
+    if group == 1:
         if gap_time_ms > t.gap_time_moderate_ms:
             return "Initial"
         if t.gap_time_high_ms <= gap_time_ms <= t.gap_time_moderate_ms:
             return "Moderate"
         return "High"
 
-    if pd_source_type in SEVERITY_GROUP_2:
+    if group == 2:
         if gap_time_ms > t.gap_time_moderate_ms:
             return "Moderate"
         return "High"
@@ -481,12 +628,14 @@ def severity_from_gap_time_and_source(
     return "Unknown"
 
 
-def severity_group_label(pd_source_type: str | None) -> str:
-    if pd_source_type in SEVERITY_GROUP_1:
-        return "Group 1: Corona / Surface"
-    if pd_source_type in SEVERITY_GROUP_2:
-        return "Group 2: Joint / Internal"
-    return "Unknown group"
+def severity_group_label(
+    pd_source_type: str | None, scheme: ClassScheme | None = None
+) -> str:
+    sch = _s(scheme)
+    group = sch.severity_groups.get(pd_source_type or "")
+    if group is None:
+        return "Unknown group"
+    return sch.group_labels.get(group, f"Group {group}")
 
 
 def compute_gap_metrics(
@@ -497,6 +646,7 @@ def compute_gap_metrics(
     pd_source_type: str | None,
     not_measurable: bool = False,
     thresholds: Thresholds | None = None,
+    scheme: ClassScheme | None = None,
 ) -> dict[str, Any]:
     """Port of `compute_current_result` (CMD FINAL CODE), minus widget access."""
     if not_measurable or left_x is None or right_x is None:
@@ -531,7 +681,9 @@ def compute_gap_metrics(
         "gap_angle_deg": round(gap_angle, 4),
         "gap_time_ms": round(gap_ms, 4),
         "gap_time_band": band,
-        "severity": severity_from_gap_time_and_source(gap_ms, pd_source_type, thresholds),
+        "severity": severity_from_gap_time_and_source(
+            gap_ms, pd_source_type, thresholds, scheme
+        ),
     }
 
 

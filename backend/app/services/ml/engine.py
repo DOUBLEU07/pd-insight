@@ -159,6 +159,44 @@ engine = _Engine()
 
 
 # =========================================================================
+# ACCOUNT-TRAINED MODELS
+# =========================================================================
+# Models built on the Training page live under storage/training/... and belong
+# to one account. They are loaded on demand and cached by (path, mtime), so a
+# retrained model under the same path is picked up without a restart.
+_custom_lock = threading.Lock()
+_custom_cache: dict[tuple[str, float], Any] = {}
+
+
+def load_custom_model(path: str | Path) -> Any | None:
+    """Load an account-trained .keras file, or None when it cannot be used."""
+    if engine.tf is None:
+        return None
+
+    target = Path(path)
+    if not target.is_absolute():
+        target = settings.storage_dir / target
+    if not target.exists():
+        logger.warning("Trained model missing on disk: %s", target)
+        return None
+
+    key = (str(target), target.stat().st_mtime)
+    with _custom_lock:
+        if key in _custom_cache:
+            return _custom_cache[key]
+        try:
+            model = engine.tf.keras.models.load_model(str(target), compile=False)
+        except Exception as exc:  # pragma: no cover - depends on the artifact
+            logger.warning("Failed loading trained model %s: %s", target, exc)
+            return None
+        # One account switching models should not grow this without bound.
+        if len(_custom_cache) > 4:
+            _custom_cache.clear()
+        _custom_cache[key] = model
+        return model
+
+
+# =========================================================================
 # PREPROCESSING
 # =========================================================================
 def preprocess_for_classification(img_rgb: np.ndarray, img_size: int | None = None) -> np.ndarray:
@@ -238,7 +276,8 @@ def _mock_scores(img_rgb: np.ndarray, tf_rgb: np.ndarray | None) -> list[float]:
     """Stable pseudo-confidences derived from the image bytes.
 
     The same image always produces the same scores, so a demo without model
-    files still behaves consistently across reloads.
+    files still behaves consistently across reloads. Always three values, for
+    the published classes: the mock stands in for the published models only.
     """
     digest = hashlib.sha256(img_rgb.tobytes()[:200_000])
     if tf_rgb is not None:
@@ -255,15 +294,38 @@ def _mock_scores(img_rgb: np.ndarray, tf_rgb: np.ndarray | None) -> list[float]:
 # =========================================================================
 # INFERENCE
 # =========================================================================
-def classify(img_rgb: np.ndarray, tf_rgb: np.ndarray | None) -> dict[str, Any]:
-    """Run PRPD-only or Hybrid classification depending on whether a TF map came in."""
+def classify(
+    img_rgb: np.ndarray,
+    tf_rgb: np.ndarray | None,
+    custom: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run PRPD-only or Hybrid classification depending on whether a TF map came in.
+
+    `custom` is the account's selected trained model, as
+    ``{"name", "kind", "path"}``. It is used only when its kind matches the
+    input mode: a Hybrid model needs the T-F map, a PRPD-only model is not
+    given one. When it does not match, or the file will not load, the published
+    Colab model for the actual input mode is used instead, and the case records
+    which one ran.
+    """
     is_hybrid = tf_rgb is not None
     kind = "hybrid" if is_hybrid else "prpd_only"
-    model = engine.get(kind)
 
     input_mode = "HYBRID_PRPD_TF" if is_hybrid else "PRPD_ONLY"
     model_used = HYBRID_MODEL_NAME if is_hybrid else PRPD_ONLY_MODEL_NAME
     model_path = engine.hybrid_path if is_hybrid else engine.prpd_only_path
+
+    model = None
+    used_custom = False
+    if custom is not None and custom.get("kind") == kind and custom.get("path"):
+        model = load_custom_model(custom["path"])
+        if model is not None:
+            model_used = f"{custom['name']} (trained on this account)"
+            model_path = str(custom["path"])
+            used_custom = True
+
+    if model is None:
+        model = engine.get(kind)
 
     if model is None:
         return {
@@ -272,6 +334,7 @@ def classify(img_rgb: np.ndarray, tf_rgb: np.ndarray | None) -> dict[str, Any]:
             "model_used": f"{model_used} (mock)",
             "model_path": "",
             "engine": "mock",
+            "used_custom": False,
         }
 
     prpd_input = np.expand_dims(preprocess_for_classification(img_rgb), axis=0)
@@ -299,6 +362,9 @@ def classify(img_rgb: np.ndarray, tf_rgb: np.ndarray | None) -> dict[str, Any]:
         "model_used": model_used,
         "model_path": model_path,
         "engine": "real",
+        # Whether the account's own model ran, which decides the class scheme
+        # the caller reads these scores through.
+        "used_custom": used_custom,
     }
 
 

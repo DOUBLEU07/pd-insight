@@ -247,20 +247,105 @@ export interface EditHistoryEntry {
   changed_by: string;
 }
 
+export type ModelKind = 'prpd_only' | 'hybrid';
+export type ModelStatus = 'draft' | 'queued' | 'running' | 'completed' | 'failed';
+export type DatasetSplit = 'train' | 'test' | 'valid';
+
+/** Which backbone a run fits. */
+export type Backbone = 'scratch' | 'mobilenetv2';
+
+/**
+ * One output class of a model, and what it means downstream. `severity_group`
+ * 1 gives Initial / Moderate / High from gap-time; 2 gives Moderate / High.
+ */
+export interface ClassSpec {
+  name: string;
+  pd_source: string;
+  severity_group: 1 | 2;
+}
+
+/** One model an account built for itself on the Training page. */
+export interface TrainedModel {
+  id: number;
+  name: string;
+  kind: ModelKind;
+  kind_label: string;
+  status: ModelStatus;
+  is_active: boolean;
+  progress: number;
+  stage: string | null;
+  class_names: string[];
+  /** class -> PD source label reported when that class wins. */
+  pd_sources: Record<string, string>;
+  /** PD source label -> severity group. */
+  severity_groups: Record<string, 1 | 2>;
+  max_epochs: number;
+  batch_size: number;
+  learning_rate: number;
+  backbone: Backbone;
+  train_count: number;
+  test_count: number;
+  valid_count: number;
+  dataset_size: number;
+  epochs: number;
+  accuracy: number | null;
+  val_accuracy: number | null;
+  loss: number | null;
+  /** "real" when TensorFlow fitted the network, "simulated" when it was absent. */
+  engine_used: 'real' | 'simulated' | null;
+  note: string | null;
+  error: string | null;
+  data_consent: boolean;
+  consent_at: string | null;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  /** Whether this model may be selected as the account's analysis model. */
+  can_activate: boolean;
+  /** False when the class set differs from the published Corona/Surface/Internal. */
+  uses_published_classes: boolean;
+  dataset_detail?: Record<string, Record<DatasetSplit, number>>;
+}
+
+/** What has been staged for a draft model so far. */
+export interface DatasetSummary {
+  /** Samples per class per split. For Hybrid these are PRPD/T-F pair counts. */
+  per_class: Record<string, Record<DatasetSplit, number>>;
+  /** Raw file counts, which differ from `per_class` when Hybrid files are unpaired. */
+  raw_per_class: Record<string, Record<DatasetSplit, number>>;
+  totals: Record<DatasetSplit, number>;
+  total: number;
+  percentages: Record<DatasetSplit, number>;
+  recommended: Record<DatasetSplit, number>;
+  unpaired: string[];
+  unpaired_count: number;
+}
+
+export interface TrainedModelDetail extends TrainedModel {
+  dataset: DatasetSummary;
+  /** Reasons the run cannot start yet. Empty means ready. */
+  blocking: string[];
+  /** Non-blocking observations about balance and split ratio. */
+  warnings: string[];
+}
+
+export interface DatasetUploadResult {
+  accepted: string[];
+  rejected: { filename: string; reason: string }[];
+  dataset: DatasetSummary;
+  blocking: string[];
+  warnings: string[];
+}
+
 export interface TrainingStats {
   reviewed_cases: number;
   training_runs: number;
   usage_events: number;
   username: string;
-  enabled: boolean;
-  message: string;
-  history: {
-    started_at: string | null;
-    username: string;
-    dataset_size: number;
-    accuracy: number | null;
-    note: string | null;
-  }[];
+  tensorflow_available: boolean;
+  recommended_split: Record<DatasetSplit, number>;
+  canonical_classes: string[];
+  history: TrainedModel[];
 }
 
 /** The decision thresholds an account may tune for itself. */

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime
 from typing import Any
@@ -24,6 +25,7 @@ from app.db.session import get_db
 from app.models.entities import Batch, CalibrationPreset, Case, EditHistory, User
 from app.services import rules
 from app.services.case_service import (
+    active_model_for,
     find_matching_preset,
     log_edit,
     next_batch_key,
@@ -32,6 +34,7 @@ from app.services.case_service import (
     owned_preset,
     log_usage,
     recompute_gap,
+    scheme_for_case,
     thresholds_for,
     thresholds_for_case,
     run_analysis,
@@ -54,6 +57,20 @@ from app.services.storage import (
 router = APIRouter(prefix="/cases", tags=["cases"])
 
 
+def _allowed_pd_sources(case: Case) -> list[str]:
+    """PD sources a reviewer may confirm on this case.
+
+    The published five, plus anything the scheme this case was scored with maps
+    a class onto, so a case analysed by an account-trained model can be signed
+    off with the source that model actually suggested.
+    """
+    allowed = list(PD_SOURCE_OPTIONS)
+    for source in scheme_for_case(case).pd_sources.values():
+        if source not in allowed:
+            allowed.append(source)
+    return allowed
+
+
 # =========================================================================
 # OPTIONS
 # =========================================================================
@@ -64,8 +81,19 @@ def options(
     # Constants are the caller's *effective* thresholds, so the Help text and
     # the on-screen tables always describe the rules this account is scored by.
     t = thresholds_for(db, user.id)
+
+    # A reviewer must be able to confirm a source the account's own model can
+    # actually suggest, so the published list is extended with whatever the
+    # selected model maps its classes onto.
+    active = active_model_for(db, user.id)
+    pd_sources = list(PD_SOURCE_OPTIONS)
+    if active is not None:
+        for source in active["scheme"].pd_sources.values():
+            if source not in pd_sources:
+                pd_sources.append(source)
+
     return {
-        "pd_source_options": PD_SOURCE_OPTIONS,
+        "pd_source_options": pd_sources,
         "review_status_options": REVIEW_STATUS_OPTIONS,
         "not_measurable_reasons": [r for r in NOT_MEASURABLE_REASON_OPTIONS if r],
         "calibration_modes": CALIBRATION_MODE_OPTIONS,
@@ -336,11 +364,21 @@ def set_decision_mode(
         raise HTTPException(status_code=400, detail="Unknown decision_mode")
 
     old = case.decision_mode
-    scores = [
-        case.ai_confidence_corona or 0.0,
-        case.ai_confidence_surface or 0.0,
-        case.ai_confidence_internal or 0.0,
-    ]
+    # Re-score against the scheme the case was originally analysed with, so
+    # switching decision rule never reinterprets its classes.
+    scheme = scheme_for_case(case)
+    stored = json.loads(case.ai_confidence_json) if case.ai_confidence_json else {}
+    if stored:
+        scores = [float(stored.get(name, 0.0)) for name in scheme.class_names]
+    else:
+        # Cases analysed before the scheme columns existed only have the three
+        # published confidences.
+        scores = [
+            case.ai_confidence_corona or 0.0,
+            case.ai_confidence_surface or 0.0,
+            case.ai_confidence_internal or 0.0,
+        ]
+        scheme = rules.DEFAULT_SCHEME
 
     ai = rules.build_ai_result(
         scores_percent=scores,
@@ -349,11 +387,12 @@ def set_decision_mode(
         model_path=case.ai_model_path or "",
         decision_mode=payload.decision_mode,
         thresholds=thresholds_for_case(db, case),
+        scheme=scheme,
     )
 
     if case.sanity_check_ran:
         ai = rules.apply_internal_sanity_override(
-            ai, {"ran": True, "internal_ok": case.sanity_check_passed}
+            ai, {"ran": True, "internal_ok": case.sanity_check_passed}, scheme
         )
 
     case.decision_mode = payload.decision_mode
@@ -390,7 +429,7 @@ def confirm_pd_source(
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     case = owned_case(db, case_id, user)
-    if payload.confirmed_pd_source_type not in PD_SOURCE_OPTIONS:
+    if payload.confirmed_pd_source_type not in _allowed_pd_sources(case):
         raise HTTPException(status_code=400, detail="Unknown PD source type")
 
     old = case.confirmed_pd_source_type
@@ -693,7 +732,7 @@ def save_review(
             raise HTTPException(status_code=400, detail=message)
 
     if payload.confirmed_pd_source_type:
-        if payload.confirmed_pd_source_type not in PD_SOURCE_OPTIONS:
+        if payload.confirmed_pd_source_type not in _allowed_pd_sources(case):
             raise HTTPException(status_code=400, detail="Unknown PD source type")
         log_edit(
             db,
