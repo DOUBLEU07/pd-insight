@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-export interface Frame {
+export interface Framea {
   x_left: number;
   x_right: number;
   y_top: number;
