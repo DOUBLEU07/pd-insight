@@ -2,13 +2,15 @@ import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
 import { AppProvider } from '@/lib/app-context';
+import { I18nProvider } from '@/lib/i18n';
+import { ThemeProvider } from '@/lib/theme';
 
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'PD Insight: Partial Discharge Diagnostic System',
+  title: 'PhasePulse | Partial Discharge Analysis Platform',
   description:
-    'Classify partial discharge defects from PRPD plots, measure gap-time and sign off each case.',
+    'Expert-reviewed PRPD assessment, Gap-Time severity analysis, and model development for high-voltage equipment.',
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
@@ -23,7 +25,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         />
       </head>
       <body>
-        <AppProvider>{children}</AppProvider>
+        <ThemeProvider>
+          <I18nProvider>
+            <AppProvider>{children}</AppProvider>
+          </I18nProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

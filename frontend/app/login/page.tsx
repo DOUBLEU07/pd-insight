@@ -3,40 +3,35 @@
 import { useEffect, useState, type KeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
 
-import { CapsLockIcon, EyeIcon } from '@/components/ui/icons';
+import {
+  ActivityIcon,
+  EyeIcon,
+  LanguagesIcon,
+  LogInIcon,
+  MoonIcon,
+  SunIcon,
+  UserPlusIcon,
+} from '@/components/ui/icons';
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/app-context';
-
-/** Strength scoring copied from the prototype's `scorePasswordStrength`. */
-const PW_STRENGTH_META = [
-  { label: 'Very weak', color: '#EF4444' },
-  { label: 'Weak', color: '#F59E0B' },
-  { label: 'Fair', color: '#EAB308' },
-  { label: 'Good', color: '#22C55E' },
-  { label: 'Very strong', color: '#10B981' },
-];
-
-function scorePasswordStrength(pw: string): number {
-  let score = 0;
-  if (pw.length >= 6) score++;
-  if (pw.length >= 10) score++;
-  if (/[A-Z]/.test(pw) && /[a-z]/.test(pw)) score++;
-  if (/[0-9]/.test(pw)) score++;
-  if (/[^A-Za-z0-9]/.test(pw)) score++;
-  return Math.min(score, 4);
-}
+import { useI18n } from '@/lib/i18n';
+import { useTheme } from '@/lib/theme';
 
 export default function LoginPage() {
   const router = useRouter();
   const { user, ready, signIn, signUp } = useApp();
+  const { lang, toggleLang, t } = useI18n();
+  const { isDark, toggleTheme } = useTheme();
 
   const [mode, setMode] = useState<'login' | 'signup'>('login');
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+  const [username, setUsername] = useState('natthawutrit.2545@gmail.com');
+  const [password, setPassword] = useState('phasepulse');
+  const [fullName, setFullName] = useState('Natthawut Rit');
   const [role, setRole] = useState('researcher');
   const [roles, setRoles] = useState<string[]>(['researcher']);
   const [showPassword, setShowPassword] = useState(false);
-  const [capsLock, setCapsLock] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
+  const [agreeTerms, setAgreeTerms] = useState(true);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -58,143 +53,240 @@ export default function LoginPage() {
 
   async function submit() {
     if (!username.trim() || !password) {
-      setError('Please enter both username and password.');
+      setError(
+        t('Please enter both username/email and password.', 'กรุณากรอกทั้งอีเมล/ชื่อผู้ใช้และรหัสผ่าน')
+      );
+      return;
+    }
+    if (mode === 'signup' && !agreeTerms) {
+      setError(
+        t('Please agree to the Terms of Use and Privacy Notice.', 'กรุณายอมรับข้อกำหนดการใช้งานและประกาศความเป็นส่วนตัว')
+      );
       return;
     }
     setBusy(true);
     setError('');
     try {
-      if (mode === 'signup') await signUp(username.trim(), password, role);
-      else await signIn(username.trim(), password);
+      if (mode === 'signup') {
+        await signUp(username.trim(), password, role);
+      } else {
+        await signIn(username.trim(), password);
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Sign in failed.');
+      setError(
+        e instanceof Error
+          ? e.message
+          : t('Authentication failed. Please check your credentials.', 'การเข้าสู่ระบบไม่สำเร็จ กรุณาตรวจสอบข้อมูล')
+      );
     } finally {
       setBusy(false);
     }
   }
 
   function onKeyEvent(e: KeyboardEvent<HTMLInputElement>) {
-    if (typeof e.getModifierState === 'function') setCapsLock(e.getModifierState('CapsLock'));
     if (e.key === 'Enter') void submit();
   }
 
-  const score = scorePasswordStrength(password);
-  const meta = PW_STRENGTH_META[score];
-
   return (
-    <div className="login-shell">
-      <div className="login-card">
-        <div className="login-logo">
-          <div className="mark">P</div>
-          <div>
-            <div className="text-[16px] font-semibold text-slate-900">PD Insight</div>
-            <div className="text-[11px] text-slate-400">Partial Discharge Diagnostic System</div>
-          </div>
-        </div>
+    <div className={`login-page ${isDark ? 'dark' : ''}`}>
+      <div className="login-brand">
+        <span>
+          <ActivityIcon width={24} height={24} />
+        </span>
+        <b>PhasePulse</b>
+        <small>{t('Partial Discharge Analysis Platform', 'แพลตฟอร์มวิเคราะห์ Partial Discharge')}</small>
+      </div>
 
-        <div className="login-tabs">
+      <article className="login-card">
+        <div className="auth-tabs">
           <button
             className={mode === 'login' ? 'active' : ''}
             onClick={() => switchMode('login')}
             type="button"
           >
-            Sign In
+            {t('Sign in', 'เข้าสู่ระบบ')}
           </button>
           <button
             className={mode === 'signup' ? 'active' : ''}
             onClick={() => switchMode('signup')}
             type="button"
           >
-            Sign Up
+            {t('Sign up', 'สมัครสมาชิก')}
           </button>
         </div>
 
-        {error && <div className="login-error">{error}</div>}
+        {mode === 'login' ? (
+          <LogInIcon width={28} height={28} className="text-sky-500 mb-2" />
+        ) : (
+          <UserPlusIcon width={28} height={28} className="text-sky-500 mb-2" />
+        )}
 
-        <div className="field">
-          <label className="field-label">Username</label>
-          <input
-            type="text"
-            value={username}
-            placeholder="e.g. researcher01"
-            autoComplete="username"
-            onChange={(e) => setUsername(e.target.value)}
-            onKeyDown={onKeyEvent}
-          />
-        </div>
+        <h1>
+          {mode === 'login'
+            ? t('Welcome back', 'ยินดีต้อนรับกลับ')
+            : t('Create your account', 'สร้างบัญชีใหม่')}
+        </h1>
+        <p>
+          {mode === 'login'
+            ? t(
+                'Sign in to access your assessments and model projects.',
+                'เข้าสู่ระบบเพื่อเข้าถึงผลการประเมินและโครงการโมเดลของคุณ'
+              )
+            : t(
+                'Register an account for the PhasePulse research platform.',
+                'ลงทะเบียนบัญชีสำหรับแพลตฟอร์มวิจัย PhasePulse'
+              )}
+        </p>
 
-        <div className="field">
-          <label className="field-label">Password</label>
-          <div className="password-field">
-            <input
-              type={showPassword ? 'text' : 'password'}
-              value={password}
-              placeholder="Password"
-              autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyUp={onKeyEvent}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void submit();
-              }}
-              onBlur={() => setCapsLock(false)}
-            />
-            <button
-              type="button"
-              className="password-toggle-btn"
-              aria-label="Show/hide password"
-              tabIndex={-1}
-              onClick={() => setShowPassword((v) => !v)}
-            >
-              <EyeIcon width={17} height={17} slashed={showPassword} />
-            </button>
-          </div>
-
-          {capsLock && (
-            <div className="capslock-warning">
-              <CapsLockIcon width={13} height={13} /> Caps Lock is on
-            </div>
-          )}
-
-          {mode === 'signup' && password && (
-            <div className="mt-[9px]">
-              <div className="pw-strength-bar-bg">
-                {[0, 1, 2, 3].map((i) => (
-                  <div
-                    key={i}
-                    className="pw-strength-segment"
-                    style={{ background: i <= score ? meta.color : '#E2E8F0' }}
-                  />
-                ))}
-              </div>
-              <div className="mt-[6px] text-[11px] text-slate-400">Strength: {meta.label}</div>
-            </div>
-          )}
-        </div>
-
-        {mode === 'signup' && (
-          <div className="field">
-            <label className="field-label">Role</label>
-            <select value={role} onChange={(e) => setRole(e.target.value)}>
-              {roles.map((r) => (
-                <option key={r} value={r}>
-                  {r.charAt(0).toUpperCase() + r.slice(1)}
-                </option>
-              ))}
-            </select>
-            <p className="mt-[6px] text-[11px] leading-[1.5] text-slate-400">
-              Role is recorded as the reviewer label on every case you sign off. It does not
-              restrict what you can do in the system.
-            </p>
+        {error && (
+          <div className="locked-banner red mb-4 text-xs">
+            {error}
           </div>
         )}
 
+        {mode === 'signup' && (
+          <label>
+            {t('Full name', 'ชื่อ–นามสกุล')}
+            <input
+              type="text"
+              placeholder={t('Your name', 'ชื่อของคุณ')}
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              onKeyDown={onKeyEvent}
+            />
+          </label>
+        )}
+
+        <label>
+          {t('Email address / Username', 'อีเมล หรือ ชื่อผู้ใช้')}
+          <input
+            type="text"
+            placeholder="name@example.com"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            onKeyDown={onKeyEvent}
+            autoComplete="username"
+          />
+        </label>
+
+        <label>
+          {t('Password', 'รหัสผ่าน')}
+          <span className="password-field">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              placeholder={t('At least 8 characters', 'อย่างน้อย 8 ตัวอักษร')}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={onKeyEvent}
+              autoComplete="current-password"
+            />
+            <button
+              type="button"
+              aria-label={t('Show password', 'แสดงรหัสผ่าน')}
+              onClick={() => setShowPassword((v) => !v)}
+            >
+              <EyeIcon width={18} height={18} />
+            </button>
+          </span>
+        </label>
+
+        {mode === 'signup' && (
+          <label>
+            {t('Role', 'บทบาทในระบบ')}
+            <select value={role} onChange={(e) => setRole(e.target.value)}>
+              {roles.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        {mode === 'login' ? (
+          <div className="login-row">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+              />
+              {t('Remember me', 'จดจำฉัน')}
+            </label>
+            <button
+              type="button"
+              className="link-btn"
+              onClick={() =>
+                alert(
+                  t(
+                    'Default demo credentials:\nnatthawutrit.2545@gmail.com / phasepulse\nor admin / admin',
+                    'รหัสผ่านเริ่มต้น:\nnatthawutrit.2545@gmail.com / phasepulse\nหรือ admin / admin'
+                  )
+                )
+              }
+            >
+              {t('Forgot password?', 'ลืมรหัสผ่าน?')}
+            </button>
+          </div>
+        ) : (
+          <label className="terms">
+            <input
+              type="checkbox"
+              checked={agreeTerms}
+              onChange={(e) => setAgreeTerms(e.target.checked)}
+            />
+            <span>
+              {t(
+                'I agree to the Terms of Use and Privacy Notice.',
+                'ฉันยอมรับข้อกำหนดการใช้งานและประกาศความเป็นส่วนตัว'
+              )}
+            </span>
+          </label>
+        )}
+
         <button
-          className="btn btn-blue w-full justify-center"
-          onClick={() => void submit()}
-          disabled={busy}
+          className="primary login-submit"
           type="button"
+          onClick={submit}
+          disabled={busy}
         >
-          {busy ? 'Please wait…' : mode === 'signup' ? 'Sign Up' : 'Sign In'}
+          <LogInIcon width={18} height={18} />
+          {busy
+            ? t('Please wait…', 'กำลังดำเนินการ…')
+            : mode === 'login'
+            ? t('Sign in', 'เข้าสู่ระบบ')
+            : t('Create account', 'สร้างบัญชี')}
+        </button>
+
+        <p className="login-note">
+          {t(
+            'Prototype access — Senior Project Partial Discharge Platform',
+            'การเข้าถึงระบบต้นแบบ — โครงงานวิศวกรรม Partial Discharge Analysis'
+          )}
+        </p>
+
+        <div className="mt-4 flex items-center justify-center gap-3 pt-3 border-t border-slate-200 dark:border-slate-700">
+          <img src="/logos/kmutnb.svg" alt="KMUTNB" className="h-7 w-auto opacity-75 hover:opacity-100 transition-opacity" title="KMUTNB" />
+          <img src="/logos/eng.jpg" alt="ENG" className="h-6 w-auto rounded opacity-75 hover:opacity-100 transition-opacity" title="Faculty of Engineering" />
+          <img src="/logos/ece.png" alt="ECE" className="h-7 w-auto opacity-75 hover:opacity-100 transition-opacity" title="ECE Department" />
+        </div>
+      </article>
+
+      <div className="login-tools">
+        <button
+          type="button"
+          onClick={toggleLang}
+          title={t('Switch to Thai', 'เปลี่ยนเป็นภาษาอังกฤษ')}
+        >
+          <LanguagesIcon width={16} height={16} />
+          {lang.toUpperCase()}
+        </button>
+        <button
+          type="button"
+          onClick={toggleTheme}
+          title={isDark ? t('Light mode', 'โหมดสว่าง') : t('Dark mode', 'โหมดมืด')}
+        >
+          {isDark ? <SunIcon width={16} height={16} /> : <MoonIcon width={16} height={16} />}
         </button>
       </div>
     </div>

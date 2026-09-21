@@ -8,6 +8,7 @@ import { FileNewIcon, LayersIcon, SlidersIcon } from '@/components/ui/icons';
 import { Spinner, StatusBadge, fmtDate } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/app-context';
+import { useI18n } from '@/lib/i18n';
 import { withinDateFilter, type DateFilter } from '@/lib/filters';
 import type { DashboardData } from '@/lib/types';
 
@@ -16,6 +17,7 @@ type SeverityFilter = 'all' | SeverityKey;
 export default function DashboardPage() {
   const router = useRouter();
   const { toast } = useApp();
+  const { t } = useI18n();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [dateFilter, setDateFilter] = useState<DateFilter>('all');
@@ -83,6 +85,47 @@ export default function DashboardPage() {
 
   return (
     <>
+      {/* ---------- Hero Section ---------- */}
+      <article className="hero mb-6">
+        <div>
+          <label>
+            <i />
+            {t('SYSTEM READY', 'ระบบพร้อมใช้งาน')}
+          </label>
+          <h2>{t('Expert-reviewed partial discharge analysis', 'การวิเคราะห์ Partial Discharge ที่ผู้เชี่ยวชาญตรวจสอบ')}</h2>
+          <p>
+            {t(
+              'Assess PRPD images, evaluate Gap-Time severity, and develop equipment-specific models in one controlled workspace.',
+              'ประเมินภาพ PRPD วิเคราะห์ความรุนแรงด้วย Gap-Time และพัฒนาโมเดลเฉพาะอุปกรณ์ในพื้นที่ทำงานเดียว'
+            )}
+          </p>
+          <div className="actions">
+            <button
+              className="primary"
+              type="button"
+              onClick={() => router.push('/cases?mode=single')}
+            >
+              {t('New assessment', 'เริ่มการประเมิน')}
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push('/cases?mode=folder')}
+            >
+              {t('Open batch', 'เปิดชุดข้อมูล')}
+            </button>
+          </div>
+        </div>
+        <div className="hidden md:block">
+          <div className="rounded-lg border border-white/20 bg-white/10 p-4 backdrop-blur-sm text-xs space-y-2">
+            <div className="font-bold text-sky-200 text-sm">{t('PhasePulse Cable Criteria', 'เกณฑ์วิเคราะห์สายเคเบิล')}</div>
+            <div className="text-white/80">• Corona &gt; 80% → Floating / Corona / Bad Contact</div>
+            <div className="text-white/80">• Surface &gt; 80% → Outside Surface Discharge</div>
+            <div className="text-white/80">• Internal &gt; 80% → Internal Discharge</div>
+            <div className="text-white/80">• Surface + Internal &gt; 60% → Termination / Joint</div>
+          </div>
+        </div>
+      </article>
+
       {/* ---------- Filters ---------- */}
       <div className="topfilters">
         <label className="flex items-center gap-[6px]">

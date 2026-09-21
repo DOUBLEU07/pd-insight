@@ -148,7 +148,7 @@ async def upload_folder(
     rejected: list[dict[str, str]] = []
 
     for upload in files:
-        filename = upload.filename or ""
+        filename = (upload.filename or "").replace('\\', '/')
         if not detect.file_ext_ok(filename):
             rejected.append({"filename": filename, "reason": "unsupported file type"})
             continue
@@ -160,7 +160,7 @@ async def upload_folder(
 
         key = detect.extract_case_key(filename) or safe_name_from_filename(filename)
         slot = "tf" if detect.filename_suggests_tf(filename) is True else "prpd"
-        buckets.setdefault(key, {})[slot] = (filename, data)
+        buckets.setdefault(key, {})[slot] = (os.path.basename(filename), data)
 
     created: list[dict[str, Any]] = []
 

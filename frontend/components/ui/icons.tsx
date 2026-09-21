@@ -188,3 +188,80 @@ export const CapsLockIcon = (p: IconProps) => (
     <path d="M12 2 3 12h5v8h8v-8h5z" />
   </svg>
 );
+
+
+export const ActivityIcon = (p: IconProps) => (
+  <svg {...base} {...p}>
+    <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" />
+  </svg>
+);
+
+export const LanguagesIcon = (p: IconProps) => (
+  <svg {...base} {...p}>
+    <path d="m5 8 6 6" />
+    <path d="m4 14 6-6 2-3" />
+    <path d="M2 5h12" />
+    <path d="M7 2h1" />
+    <path d="m22 22-5-10-5 10" />
+    <path d="M14 18h6" />
+  </svg>
+);
+
+export const LogInIcon = (p: IconProps) => (
+  <svg {...base} {...p}>
+    <path d="m10 17 5-5-5-5" />
+    <path d="M15 12H3" />
+    <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+  </svg>
+);
+
+export const UserPlusIcon = (p: IconProps) => (
+  <svg {...base} {...p}>
+    <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <line x1="19" y1="8" x2="19" y2="14" />
+    <line x1="22" y1="11" x2="16" y2="11" />
+  </svg>
+);
+
+export const MoonIcon = (p: IconProps) => (
+  <svg {...base} {...p}>
+    <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401" />
+  </svg>
+);
+
+export const SunIcon = (p: IconProps) => (
+  <svg {...base} {...p}>
+    <circle cx="12" cy="12" r="4" />
+    <path d="M12 2v2" />
+    <path d="M12 20v2" />
+    <path d="m4.93 4.93 1.41 1.41" />
+    <path d="m17.66 17.66 1.41 1.41" />
+    <path d="M2 12h2" />
+    <path d="M20 12h2" />
+    <path d="m6.34 17.66-1.41 1.41" />
+    <path d="m19.07 4.93-1.41 1.41" />
+  </svg>
+);
+
+export const ChevronDownIcon = (p: IconProps) => (
+  <svg {...base} {...p}>
+    <polyline points="6 9 12 15 18 9" />
+  </svg>
+);
+
+export const FolderIcon = (p: IconProps) => (
+  <svg {...base} {...p}>
+    <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
+  </svg>
+);
+
+export const FileTextIcon = (p: IconProps) => (
+  <svg {...base} {...p}>
+    <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+    <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+    <path d="M10 9H8" />
+    <path d="M16 13H8" />
+    <path d="M16 17H8" />
+  </svg>
+);

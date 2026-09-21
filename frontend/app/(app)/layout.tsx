@@ -1,30 +1,28 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import { Suspense, useEffect, useState, type ReactNode } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 import { ConsentGate } from '@/components/shell/ConsentGate';
 import { HelpPopover } from '@/components/shell/HelpPopover';
 import {
+  ActivityIcon,
+  ChevronDownIcon,
   DashboardIcon,
+  FileTextIcon,
+  FolderIcon,
   HelpIcon,
+  ImageIcon,
+  LanguagesIcon,
+  MoonIcon,
   SettingsIcon,
   SignOutIcon,
+  SunIcon,
   TrainingIcon,
-  WorkflowIcon,
 } from '@/components/ui/icons';
 import { useApp } from '@/lib/app-context';
-
-const PAGE_META: Record<string, { title: string; sub: string }> = {
-  '/dashboard': { title: 'Dashboard', sub: 'Overview of all PD cases' },
-  '/cases': {
-    title: 'Case Workflow',
-    sub: 'Upload a single case, or import a folder, then calibrate and review end-to-end',
-  },
-  '/batches': { title: 'Batch Preview', sub: 'Images in this batch' },
-  '/training': { title: 'Model Training', sub: 'Accumulated usage data and model training runs' },
-  '/settings': { title: 'Settings', sub: 'System configuration and model status' },
-};
+import { useI18n } from '@/lib/i18n';
+import { useTheme } from '@/lib/theme';
 
 /** Institution logos, ordered university → faculty → department. */
 const INSTITUTION_LOGOS = [
@@ -41,16 +39,71 @@ const INSTITUTION_LOGOS = [
   },
 ];
 
-function metaFor(pathname: string) {
-  const key = Object.keys(PAGE_META).find((k) => pathname.startsWith(k));
-  return key ? PAGE_META[key] : { title: 'PD Insight', sub: '' };
+function PageHeadContent({ pathname }: { pathname: string }) {
+  const searchParams = useSearchParams();
+  const { t } = useI18n();
+
+  let sectionKey = 'DASHBOARD';
+  let pageTitle = t('Dashboard', 'แดชบอร์ด');
+
+  if (pathname.startsWith('/cases')) {
+    const mode = searchParams.get('mode');
+    if (mode === 'folder') {
+      sectionKey = 'FOLDER / BATCH ASSESSMENT';
+      pageTitle = t('Folder / Batch Assessment', 'ประเมินโฟลเดอร์ / ชุดข้อมูล');
+    } else if (mode === 'results') {
+      sectionKey = 'ASSESSMENT RESULTS';
+      pageTitle = t('Assessment Results', 'ผลการประเมิน');
+    } else if (pathname.includes('/cases/')) {
+      sectionKey = 'CASE REVIEW';
+      pageTitle = t('Case Review & Calibration', 'ตรวจผลและปรับแกนเคส');
+    } else {
+      sectionKey = 'SINGLE IMAGE ASSESSMENT';
+      pageTitle = t('Single Image Assessment', 'ประเมินภาพเดี่ยว');
+    }
+  } else if (pathname.startsWith('/batches')) {
+    sectionKey = 'BATCH PREVIEW';
+    pageTitle = t('Batch Preview', 'ภาพรวมชุดข้อมูล');
+  } else if (pathname.startsWith('/training')) {
+    sectionKey = 'MODEL DEVELOPMENT';
+    pageTitle = t('Model Development', 'พัฒนาโมเดล');
+  } else if (pathname.startsWith('/settings')) {
+    sectionKey = 'SETTINGS';
+    pageTitle = t('Settings', 'การตั้งค่า');
+  }
+
+  return (
+    <div className="page-head">
+      <p>PHASEPULSE / {sectionKey}</p>
+      <h1>{pageTitle}</h1>
+    </div>
+  );
+}
+
+function PageHeadBanner({ pathname }: { pathname: string }) {
+  return (
+    <Suspense
+      fallback={
+        <div className="page-head">
+          <p>PHASEPULSE</p>
+          <h1>PhasePulse</h1>
+        </div>
+      }
+    >
+      <PageHeadContent pathname={pathname} />
+    </Suspense>
+  );
 }
 
 export default function AppLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const { user, ready, signOut } = useApp();
+  const { lang, toggleLang, t } = useI18n();
+  const { isDark, toggleTheme } = useTheme();
+
   const [helpOpen, setHelpOpen] = useState(false);
+  const [assessmentOpen, setAssessmentOpen] = useState(false);
 
   useEffect(() => {
     if (ready && !user) router.replace('/login');
@@ -59,154 +112,213 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   if (!ready || !user) {
     return (
       <div className="flex min-h-screen items-center justify-center text-[13px] text-slate-400">
-        Loading…
+        {t('Loading…', 'กำลังโหลด…')}
       </div>
     );
   }
 
-  const meta = metaFor(pathname);
+  const isCasesActive = pathname.startsWith('/cases') || pathname.startsWith('/batches');
+  const isDashboardActive = pathname === '/dashboard' || pathname === '/';
+  const isTrainingActive = pathname.startsWith('/training');
 
-  const navItems = [
-    { href: '/dashboard', label: 'Dashboard', Icon: DashboardIcon },
-    { href: '/cases', label: 'Case Workflow', Icon: WorkflowIcon },
-    { href: '/training', label: 'Model Training', Icon: TrainingIcon },
-  ];
+  const avatarInitial = user.username
+    ? user.username.split('@')[0].slice(0, 2).toUpperCase()
+    : 'NR';
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="sidebar-logo">
-          <div className="mark">P</div>
-          <div>
-            <div className="text-[15.5px] font-semibold leading-[1.2] text-slate-900">
-              PD Insight
-            </div>
-            <div className="mt-px text-[11px] text-slate-400">
-              Partial Discharge Diagnostic System
+    <div className={`app ${isDark ? 'dark' : ''}`}>
+      <header className="topbar">
+        {/* Brand */}
+        <button
+          className="brand"
+          onClick={() => router.push('/dashboard')}
+          type="button"
+        >
+          <span>
+            <ActivityIcon width={22} height={22} />
+          </span>
+          <b>
+            PhasePulse
+            <small>{t('Partial Discharge Analysis Platform', 'แพลตฟอร์มวิเคราะห์ Partial Discharge')}</small>
+          </b>
+        </button>
+
+        {/* Main Navigation */}
+        <nav className="main-nav">
+          <button
+            type="button"
+            className={isDashboardActive ? 'active' : ''}
+            onClick={() => router.push('/dashboard')}
+          >
+            <DashboardIcon width={17} height={17} />
+            <span>{t('Dashboard', 'แดชบอร์ด')}</span>
+          </button>
+
+          {/* Assessment Dropdown */}
+          <div
+            className={`nav-menu ${isCasesActive ? 'active' : ''}`}
+            onMouseEnter={() => setAssessmentOpen(true)}
+            onMouseLeave={() => setAssessmentOpen(false)}
+          >
+            <button
+              type="button"
+              className="nav-menu-trigger"
+              onClick={() => router.push('/cases?mode=single')}
+            >
+              <ImageIcon width={17} height={17} />
+              <span>{t('PD Assessment', 'การประเมิน PD')}</span>
+              <ChevronDownIcon width={14} height={14} />
+            </button>
+
+            <div className={`nav-dropdown ${assessmentOpen ? 'block' : ''}`}>
+              <button
+                type="button"
+                onClick={() => {
+                  setAssessmentOpen(false);
+                  router.push('/cases?mode=single');
+                }}
+              >
+                <ImageIcon width={18} height={18} className="text-sky-500" />
+                <span>
+                  <b>{t('Single Image', 'ภาพเดี่ยว')}</b>
+                  <small>{t('PRPD or PRPD + TF Map', 'PRPD หรือ PRPD + TF Map')}</small>
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setAssessmentOpen(false);
+                  router.push('/cases?mode=folder');
+                }}
+              >
+                <FolderIcon width={18} height={18} className="text-amber-500" />
+                <span>
+                  <b>{t('Folder / Batch', 'โฟลเดอร์ / ชุดข้อมูล')}</b>
+                  <small>{t('Pair and review up to 500 images', 'จับคู่และตรวจได้สูงสุด 500 ภาพ')}</small>
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setAssessmentOpen(false);
+                  router.push('/cases?mode=results');
+                }}
+              >
+                <FileTextIcon width={18} height={18} className="text-emerald-500" />
+                <span>
+                  <b>{t('Results', 'ผลลัพธ์')}</b>
+                  <small>{t('Cases, details and exports', 'เคส รายละเอียด และการส่งออก')}</small>
+                </span>
+              </button>
             </div>
           </div>
-        </div>
 
-        <nav className="sidebar-nav">
-          {navItems.map(({ href, label, Icon }) => {
-            const active =
-              pathname.startsWith(href) ||
-              (href === '/dashboard' && pathname.startsWith('/batches'));
-            return (
-              <button
-                key={href}
-                className={active ? 'active' : ''}
-                onClick={() => router.push(href)}
-                type="button"
-              >
-                <Icon />
-                <span>{label}</span>
-              </button>
-            );
-          })}
+          <button
+            type="button"
+            className={isTrainingActive ? 'active' : ''}
+            onClick={() => router.push('/training')}
+          >
+            <TrainingIcon width={17} height={17} />
+            <span>{t('Model Development', 'พัฒนาโมเดล')}</span>
+          </button>
         </nav>
 
-        <div className="flex-1" />
+        {/* Tools on Right */}
+        <div className="tools">
+          <button
+            type="button"
+            onClick={() => setHelpOpen(true)}
+            title={t('Help / Documentation', 'ช่วยเหลือ / เอกสารประกอบ')}
+          >
+            <HelpIcon width={17} height={17} />
+            <span className="hidden sm:inline">{t('Help', 'ช่วยเหลือ')}</span>
+          </button>
 
-        <div className="sidebar-foot">
-          <div className="link" data-help-trigger onClick={() => setHelpOpen((v) => !v)}>
-            <HelpIcon width={15} height={15} />
-            <span>Help</span>
-          </div>
-          <div className="link" onClick={() => router.push('/settings')}>
-            <SettingsIcon width={15} height={15} />
-            <span>Settings</span>
-          </div>
-          <div className="link" onClick={() => void signOut()}>
-            <SignOutIcon width={15} height={15} />
-            <span>Sign Out</span>
-          </div>
-          <div className="account-chip">
-            <span className="avatar">{user.username.charAt(0).toUpperCase()}</span>
-            <span>
-              <b className="text-slate-900">{user.username}</b>
-              <br />
-              <span className="capitalize text-slate-400">{user.role}</span>
-            </span>
+          <button
+            type="button"
+            className={pathname.startsWith('/settings') ? 'active' : ''}
+            onClick={() => router.push('/settings')}
+            aria-label={t('Settings', 'การตั้งค่า')}
+            title={t('Settings', 'การตั้งค่า')}
+          >
+            <SettingsIcon width={17} height={17} />
+          </button>
+
+          {/* Language Switcher */}
+          <button
+            type="button"
+            onClick={toggleLang}
+            title={t('Switch to Thai', 'เปลี่ยนเป็นภาษาอังกฤษ')}
+            className="flex items-center gap-1 font-semibold"
+          >
+            <LanguagesIcon width={16} height={16} />
+            <span>{lang.toUpperCase()}</span>
+          </button>
+
+          {/* Theme Toggle */}
+          <button
+            type="button"
+            onClick={toggleTheme}
+            title={isDark ? t('Switch to Light Mode', 'เปลี่ยนเป็นโหมดสว่าง') : t('Switch to Dark Mode', 'เปลี่ยนเป็นโหมดมืด')}
+          >
+            {isDark ? <SunIcon width={17} height={17} /> : <MoonIcon width={17} height={17} />}
+          </button>
+
+          {/* Sign Out */}
+          <button
+            type="button"
+            onClick={() => void signOut()}
+            title={t('Log out', 'ออกจากระบบ')}
+            aria-label={t('Log out', 'ออกจากระบบ')}
+          >
+            <SignOutIcon width={17} height={17} />
+          </button>
+
+          {/* User Profile Avatar */}
+          <button
+            type="button"
+            className="profile-button"
+            onClick={() => router.push('/dashboard')}
+            title={`${user.username} (${user.role})`}
+          >
+            {avatarInitial}
+          </button>
+
+          {/* Institution logos */}
+          <div className="hero-logo-row hidden xl:flex items-center gap-2 pl-2 border-l border-white/20">
+            {INSTITUTION_LOGOS.map(({ src, alt, title }) => (
+              <div
+                className="flex h-8 items-center justify-center rounded bg-white/95 px-2 py-0.5 shadow-sm"
+                key={src}
+                title={title}
+              >
+                <img src={src} alt={alt} className="h-6 w-auto object-contain" />
+              </div>
+            ))}
           </div>
         </div>
-      </aside>
+      </header>
 
-      <div className="main-col">
-        <header className="topbar">
-          <svg
-            className="topbar-scatter"
-            viewBox="0 0 1200 140"
-            preserveAspectRatio="none"
-            aria-hidden="true"
-          >
-            <path
-              d="M0,70 Q150,15 300,70 T600,70 T900,70 T1200,70"
-              fill="none"
-              stroke="#ffffff"
-              strokeWidth="1"
-              strokeOpacity=".22"
-            />
-            <g fill="#F59E0B" fillOpacity=".7">
-              <circle cx="140" cy="34" r="2.2" />
-              <circle cx="155" cy="28" r="1.7" />
-              <circle cx="170" cy="42" r="2" />
-              <circle cx="182" cy="24" r="1.5" />
-              <circle cx="800" cy="106" r="2" />
-              <circle cx="815" cy="114" r="1.6" />
-            </g>
-            <g fill="#0EA5E9" fillOpacity=".7">
-              <circle cx="440" cy="40" r="1.8" />
-              <circle cx="455" cy="52" r="2.2" />
-              <circle cx="470" cy="32" r="1.6" />
-              <circle cx="1060" cy="100" r="1.8" />
-              <circle cx="1075" cy="92" r="1.6" />
-            </g>
-            <g fill="#EF4444" fillOpacity=".65">
-              <circle cx="640" cy="104" r="2.2" />
-              <circle cx="655" cy="114" r="1.8" />
-              <circle cx="670" cy="98" r="1.6" />
-              <circle cx="95" cy="100" r="1.8" />
-            </g>
-          </svg>
+      {/* Page Breadcrumb / Heading Bar */}
+      <PageHeadBanner pathname={pathname} />
 
-          <div className="relative z-[1]">
-            <h1>{meta.title}</h1>
-            <div className="sub">{meta.sub}</div>
-          </div>
+      <main className="content">{children}</main>
 
-          <div className="relative z-[1] flex flex-shrink-0 items-center gap-4">
-            <button
-              className="flex h-7 w-7 items-center justify-center rounded-full border border-white/40 bg-white/[.16] p-0 text-[13px] font-extrabold text-white"
-              title="Help / how this page works"
-              data-help-trigger
-              onClick={() => setHelpOpen((v) => !v)}
-              type="button"
-            >
-              ?
-            </button>
-            <div className="hero-logo-row hidden sm:flex">
-              {INSTITUTION_LOGOS.map(({ src, alt, title }) => (
-                <div className="hero-logo-slot" key={src} title={title}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={src} alt={alt} />
-                </div>
-              ))}
-            </div>
-          </div>
-        </header>
-
-        <main className="content">{children}</main>
-
-        <footer className="note">
-          <div className="mx-auto max-w-[820px] rounded-md border border-[#FDE68A] bg-amber-50 px-[14px] py-[9px] text-[12px] font-semibold leading-[1.5] text-amber-700">
-            AI results are a preliminary assessment, not a diagnosis. Verify every case against the
-            measurement data and confirm with a qualified engineer before making an engineering
-            decision.
-          </div>
-          <div className="mt-[10px]">PD Insight: Partial Discharge Diagnostic System</div>
-        </footer>
-      </div>
+      <footer className="note">
+        <div className="mx-auto max-w-[840px] rounded-md border border-[#FDE68A] bg-amber-50 dark:bg-amber-950/40 dark:border-amber-800/60 px-[14px] py-[9px] text-[12px] font-semibold leading-[1.5] text-amber-700 dark:text-amber-300">
+          {t(
+            'AI results are a preliminary assessment, not a diagnosis. Verify every case against the measurement data and confirm with a qualified engineer before making an engineering decision.',
+            'ผลการประเมินจาก AI เป็นเพียงการวิเคราะห์เบื้องต้นไม่ใช่การวินิจฉัยขั้นสุดท้าย กรุณาตรวจสอบกับข้อมูลการวัดและยืนยันร่วมกับวิศวกรผู้เชี่ยวชาญก่อนตัดสินใจทางวิศวกรรม'
+          )}
+        </div>
+        <div className="mt-3 flex flex-wrap items-center justify-center gap-4 text-xs text-slate-400">
+          <span>PhasePulse: Partial Discharge Analysis Platform</span>
+          <span>•</span>
+          <span>KMUTNB • Faculty of Engineering • ECE</span>
+        </div>
+      </footer>
 
       <HelpPopover open={helpOpen} onClose={() => setHelpOpen(false)} />
       <ConsentGate onDecline={() => void signOut()} />

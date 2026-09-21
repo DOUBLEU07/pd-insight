@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 
 import { useApp } from '@/lib/app-context';
+import { useI18n } from '@/lib/i18n';
 
 /**
  * Contextual reference, ported from the prototype's `helpContentHTML` and then
@@ -22,19 +23,20 @@ import { useApp } from '@/lib/app-context';
  */
 
 const SECTIONS = [
-  { id: 'help-about', label: 'About' },
-  { id: 'help-theory', label: 'PD Fundamentals' },
-  { id: 'help-workflow', label: 'Workflow' },
-  { id: 'help-classification', label: 'Classification' },
-  { id: 'help-severity', label: 'Gap-Time & Severity' },
-  { id: 'help-limits', label: 'Scope & Limitations' },
-  { id: 'help-data', label: 'Data Handling' },
-  { id: 'help-refs', label: 'References' },
+  { id: 'help-about', label: 'About', labelTh: 'เกี่ยวกับระบบ' },
+  { id: 'help-theory', label: 'PD Fundamentals', labelTh: 'ทฤษฎีพื้นฐาน PD' },
+  { id: 'help-workflow', label: 'Workflow', labelTh: 'ขั้นตอนการทำงาน' },
+  { id: 'help-classification', label: 'Classification', labelTh: 'การจำแนกประเภท' },
+  { id: 'help-severity', label: 'Gap-Time & Severity', labelTh: 'Gap-Time และความรุนแรง' },
+  { id: 'help-limits', label: 'Scope & Limitations', labelTh: 'ขอบเขตและข้อจำกัด' },
+  { id: 'help-data', label: 'Data Handling', labelTh: 'การจัดการข้อมูล' },
+  { id: 'help-refs', label: 'References', labelTh: 'เอกสารอ้างอิง' },
 ];
 
 export function HelpPopover({ open, onClose }: { open: boolean; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const { options } = useApp();
+  const { t, lang } = useI18n();
 
   useEffect(() => {
     if (!open) return;
@@ -86,7 +88,7 @@ export function HelpPopover({ open, onClose }: { open: boolean; onClose: () => v
         ×
       </button>
 
-      <h3>Help &amp; Reference</h3>
+      <h3>{t('Help & Reference', 'คู่มือและการอ้างอิง')}</h3>
       <p className="m-0 mb-[14px] text-[12px] text-slate-400">
         What PD Insight is, how a case moves through the workflow, and where the limits of the
         analysis lie.
@@ -95,7 +97,7 @@ export function HelpPopover({ open, onClose }: { open: boolean; onClose: () => v
       <div className="help-toc">
         {SECTIONS.map((s) => (
           <button key={s.id} onClick={() => jumpTo(s.id)} type="button">
-            {s.label}
+            {t(s.label, s.labelTh)}
           </button>
         ))}
       </div>

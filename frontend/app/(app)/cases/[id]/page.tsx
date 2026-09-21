@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 
 import { PrpdCanvas, NudgeRow, type Frame, type Handle } from '@/components/case/PrpdCanvas';
@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/primitives';
 import { api, fileUrl } from '@/lib/api';
 import { useApp } from '@/lib/app-context';
+import { useI18n } from '@/lib/i18n';
 import type { CalibrationPreset, PdCase, ReviewStatus } from '@/lib/types';
 
 const STEPS = [
@@ -66,12 +67,14 @@ function describeModel(modelUsed: string | null, inputMode: string | null): stri
   return /mock/i.test(modelUsed ?? '') ? `${base} (mock engine, not a real prediction)` : base;
 }
 
-export default function CaseWizardPage() {
+function CaseWizardPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
   const searchParams = useSearchParams();
   const caseId = Number(params.id);
   const { options, toast, user } = useApp();
+  const { t, lang } = useI18n();
+  const [lockSpan, setLockSpan] = useState(false);
 
   const [pdCase, setPdCase] = useState<PdCase | null>(null);
   const [loading, setLoading] = useState(true);
@@ -230,6 +233,49 @@ export default function CaseWizardPage() {
     const next = { ...frame, [handle]: (frame as any)[handle] + delta } as Frame;
     setFrame(next);
     void commitCalibration(next);
+  }
+
+  function onDragPair(left: number, right: number) {
+    setGapLines({ left, right });
+  }
+
+  function onDragEndPair(left: number, right: number) {
+    void commitGap(left, right);
+  }
+
+  function onDragFramePair(nextFrame: Frame) {
+    setFrame(nextFrame);
+  }
+
+  function onDragEndFramePair(nextFrame: Frame) {
+    void commitCalibration(nextFrame);
+  }
+
+  function nudgePair(type: 'gap' | 'frame' | 'y', delta: number) {
+    if (type === 'gap') {
+      if (gapLines.left == null || gapLines.right == null || !frame) return;
+      const span = gapLines.right - gapLines.left;
+      let nextLeft = gapLines.left + delta;
+      let nextRight = gapLines.right + delta;
+      if (nextLeft < frame.x_left) {
+        nextLeft = frame.x_left;
+        nextRight = nextLeft + span;
+      }
+      if (nextRight > frame.x_right) {
+        nextRight = frame.x_right;
+        nextLeft = nextRight - span;
+      }
+      setGapLines({ left: nextLeft, right: nextRight });
+      void commitGap(nextLeft, nextRight);
+    } else if (type === 'frame') {
+      if (!frame) return;
+      const span = frame.x_right - frame.x_left;
+      const nextLeft = Math.max(0, frame.x_left + delta);
+      const nextRight = nextLeft + span;
+      const next = { ...frame, x_left: nextLeft, x_right: nextRight };
+      setFrame(next);
+      void commitCalibration(next);
+    }
   }
 
   function nudgeGap(handle: Handle, delta: number) {
@@ -688,24 +734,44 @@ export default function CaseWizardPage() {
 
           <div className="row">
             <div className="col min-w-[380px] flex-[2]">
+              <div className="mb-2 flex items-center justify-between flex-wrap gap-2">
+                <button
+                  type="button"
+                  className={`btn ${lockSpan ? 'primary' : 'btn-outline'} text-xs`}
+                  onClick={() => setLockSpan((v) => !v)}
+                  title={t('Adjust two lines simultaneously', 'ปรับสองเส้นพร้อมกัน')}
+                >
+                  ⟷ {t('Adjust Both Lines (Lock Span)', 'ปรับสองเส้นพร้อมกัน (Lock Span)')}:{' '}
+                  <b>{lockSpan ? t('ON', 'เปิด') : t('OFF', 'ปิด')}</b>
+                </button>
+                <span className="text-xs text-slate-500">
+                  {lockSpan
+                    ? t('Dragging 0° or 360° moves both lines together', 'ลากเส้น 0° หรือ 360° จะขยับทั้งสองเส้นพร้อมกัน')
+                    : t('Click toggle to move both lines together', 'กดเปิดเพื่อปรับสองเส้นพร้อมกัน')}
+                </span>
+              </div>
               <PrpdCanvas
                 imageUrl={prpdUrl}
                 imageWidth={c.image_width ?? 400}
                 imageHeight={c.image_height ?? 300}
                 frame={frame}
                 mode="calibration"
+                lockSpan={lockSpan}
                 onDrag={onCalibDrag}
                 onDragEnd={onCalibDragEnd}
+                onDragFramePair={onDragFramePair}
+                onDragEndFramePair={onDragEndFramePair}
                 displayWidth={720}
               />
               <NudgeRow
                 items={[
-                  { label: 'Left', handle: 'x_left' },
-                  { label: 'Right', handle: 'x_right' },
+                  { label: '0° (L)', handle: 'x_left' },
+                  { label: '360° (R)', handle: 'x_right' },
                   { label: 'Top', handle: 'y_top' },
                   { label: 'Bottom', handle: 'y_bottom' },
                 ]}
                 onNudge={nudgeCalib}
+                onNudgePair={nudgePair}
               />
             </div>
 
@@ -825,6 +891,20 @@ export default function CaseWizardPage() {
                 </button>
               </div>
 
+              <div className="mb-2 flex items-center justify-between flex-wrap gap-2">
+                <button
+                  type="button"
+                  className={`btn ${lockSpan ? 'primary' : 'btn-outline'} text-xs`}
+                  onClick={() => setLockSpan((v) => !v)}
+                  title={t('Adjust two lines simultaneously', 'ปรับสองเส้นพร้อมกัน')}
+                >
+                  ⟷ {t('Adjust Both Gap Lines (Lock Span)', 'ปรับสองเส้น Gap พร้อมกัน')}:{' '}
+                  <b>{lockSpan ? t('ON', 'เปิด') : t('OFF', 'ปิด')}</b>
+                </button>
+                <span className="text-xs text-slate-500">
+                  {t('Drag band between L and R, or toggle to lock span', 'ลากแถบสีระหว่างเส้น L และ R เพื่อเลื่อนทั้งสองเส้นพร้อมกัน')}
+                </span>
+              </div>
               <PrpdCanvas
                 imageUrl={prpdUrl}
                 imageWidth={c.image_width ?? 400}
@@ -833,16 +913,20 @@ export default function CaseWizardPage() {
                 mode="gap"
                 gapLeft={gapLines.left}
                 gapRight={gapLines.right}
+                lockSpan={lockSpan}
                 onDrag={onGapDrag}
                 onDragEnd={onGapDragEnd}
+                onDragPair={onDragPair}
+                onDragEndPair={onDragEndPair}
                 displayWidth={720}
               />
               <NudgeRow
                 items={[
-                  { label: 'Left', handle: 'gapLeft' },
-                  { label: 'Right', handle: 'gapRight' },
+                  { label: 'Gap L', handle: 'gapLeft' },
+                  { label: 'Gap R', handle: 'gapRight' },
                 ]}
                 onNudge={nudgeGap}
+                onNudgePair={nudgePair}
                 disabled={gapLines.left == null}
               />
 
@@ -1324,5 +1408,14 @@ function FullSummaryTable({ pdCase: c }: { pdCase: PdCase }) {
         ])}
       </tbody>
     </table>
+  );
+}
+
+
+export default function CaseWizardPageWrapper() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center text-slate-400"><Spinner label="Loading case…" /></div>}>
+      <CaseWizardPage />
+    </Suspense>
   );
 }
