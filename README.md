@@ -23,10 +23,11 @@ A production-grade web application for partial discharge (PD) pattern analysis, 
    - **Sign-Off:** Reviewer assignment, audit remarks, and structured sign-off status.
 2. **Interactive PRPD Canvas:** Zoom, pan, real-time pixel-coordinate mapping, and instant visual feedback.
 3. **Multi-Tenant Data Privacy:** All cases, batches, calibration presets, and custom-trained models are strictly scoped to the owner's account.
-4. **Custom Model Training:** Per-account deep learning training wizard (Compact CNN or fine-tuned MobileNetV2) supporting custom defect classes, dataset staging, and instant model selection in Settings.
+4. **Custom Model Training:** Per-account MobileNetV2 transfer-learning wizard supporting custom defect classes, whole-folder dataset upload, and instant model selection in Settings. Each finished run shows its learning curves, confusion matrix, per-class precision/recall, and the test images it misclassified.
 5. **Modern UI & Localization:**
-   - Theme toggle: Light, Dark, or Auto (synchronized with local time).
-   - Bilingual support: Instant toggle between English and Thai (`EN | TH`).
+   - Theme: Light, Dark, or Auto (dark 18:00–06:00), applied before first paint.
+   - Bilingual: every page, dialog and the Help reference switch between English and Thai (`EN | TH`).
+   - Account: change password from the account menu or Settings.
 6. **Automated Schema Migrations:** Managed through Alembic with automatic upgrade on container startup.
 
 ---
@@ -43,7 +44,7 @@ A production-grade web application for partial discharge (PD) pattern analysis, 
 | Internal sanity check | `PRPD_2_Only.md` PART 5 | `cv/detect.internal_sanity_check` |
 | Input validation | PART3 `validate_input` | `cv/detect.validate_input` |
 | Pretrained Model inference | `PRPD_2_Only` / `PRPD_3_Hybrid` / auto-gap regression | `backend/app/services/ml/engine.py` |
-| Custom Model Training | MobileNetV2 / CNN transfer learning | `backend/app/services/ml/training.py` |
+| Custom Model Training | MobileNetV2 transfer learning + per-image test evaluation | `backend/app/services/ml/training.py` |
 | Database migrations | Schema versioning & updates | `backend/alembic/` & `app/main.py` |
 | Record schema | `final_summary.csv` (73 columns) | `backend/app/core/schema_columns.py` |
 | Localization & Theme | Client-side reactive providers | `frontend/lib/i18n.tsx`, `frontend/lib/theme.tsx` |
@@ -266,7 +267,7 @@ The Model Training module provides end-to-end training and fine-tuning of custom
 
 1. **New Model Wizard:**
    - **Mode Selection:** Train a **PRPD-only** or **Hybrid (PRPD + T-F)** classification model.
-   - **Model Architecture:** Choose between a lightweight **Compact CNN** (fast iteration) or transfer learning with **MobileNetV2** (high accuracy with pre-trained weights).
+   - **Model Architecture:** Transfer learning with **MobileNetV2** (ImageNet weights, cached in the Docker image at build time). The compact CNN option was removed because it did not train reliably.
    - **Defect Class Configuration:** Define custom defect classes (e.g. Corona, Surface, Internal, Floating) and map each to a PD Source and Severity Group (Group 1 or Group 2).
    - **Hyperparameters:** Configure training epochs, batch size, and learning rate with Early Stopping callbacks.
 2. **Dataset Management & Consent:**
@@ -287,10 +288,10 @@ The Model Training module provides end-to-end training and fine-tuning of custom
 | `/login` | Authentication | Sign in / Sign up, password strength indicator, caps-lock warning, reviewer role selector. |
 | `/dashboard` | Diagnostic Dashboard | Operational KPI cards, upload trends, severity grouping, quick navigation. |
 | `/batches/[id]` | Batch Overview | Grid overview of all PRPD/TF pairs within an upload batch. |
-| `/cases` | Case Management | Single and folder batch uploads, queue filter, calibration preset manager, export center. |
+| `/cases` | Case Management | Single-image upload, folder import (with upload progress and an optional pinned axis preset), results list with expandable full data and CSV export. |
 | `/cases/[id]` | 5-Step Review Wizard | Step-by-step diagnostic verification, interactive canvas, gap-time adjustments, final sign-off. |
 | `/training` | Model Training Studio | Dataset staging stats, New Model Wizard, training runs history, live training logs. |
-| `/settings` | System Settings | Active model selector, TensorFlow & `.keras` engine status, decision mode thresholds, rule guide. |
+| `/settings` | System Settings | Theme and language, change password, active model selector, saved axis presets, decision thresholds, engine status. |
 
 ---
 

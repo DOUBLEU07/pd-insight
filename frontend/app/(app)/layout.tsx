@@ -1,19 +1,19 @@
 'use client';
 
-import { Suspense, useEffect, useState, type ReactNode } from 'react';
+import { Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 import { ConsentGate } from '@/components/shell/ConsentGate';
 import { HelpPopover } from '@/components/shell/HelpPopover';
 import {
   ActivityIcon,
-  ChevronDownIcon,
+  AlertIcon,
   DashboardIcon,
   FileTextIcon,
   FolderIcon,
   HelpIcon,
   ImageIcon,
-  LanguagesIcon,
+  KeyIcon,
   MoonIcon,
   SettingsIcon,
   SignOutIcon,
@@ -26,72 +26,181 @@ import { useTheme } from '@/lib/theme';
 
 /** Institution logos, ordered university → faculty → department. */
 const INSTITUTION_LOGOS = [
-  {
-    src: '/logos/kmutnb.svg',
-    alt: 'KMUTNB',
-    title: "King Mongkut's University of Technology North Bangkok",
-  },
+  { src: '/logos/kmutnb.svg', alt: 'KMUTNB', title: "King Mongkut's University of Technology North Bangkok" },
   { src: '/logos/eng.jpg', alt: 'ENG KMUTNB', title: 'Faculty of Engineering, KMUTNB' },
-  {
-    src: '/logos/ece.png',
-    alt: 'ECE KMUTNB',
-    title: 'Department of Electrical and Computer Engineering, KMUTNB',
-  },
+  { src: '/logos/ece.png', alt: 'ECE KMUTNB', title: 'Department of Electrical and Computer Engineering, KMUTNB' },
 ];
 
-function PageHeadContent({ pathname }: { pathname: string }) {
-  const searchParams = useSearchParams();
+type Section = 'dashboard' | 'single' | 'folder' | 'results' | 'training' | 'settings';
+
+function useSection(): Section {
+  const pathname = usePathname();
+  const mode = useSearchParams().get('mode');
+  if (pathname.startsWith('/batches')) return 'folder';
+  if (pathname.startsWith('/cases/')) return 'results';
+  if (pathname.startsWith('/cases')) {
+    if (mode === 'folder') return 'folder';
+    if (mode === 'results') return 'results';
+    return 'single';
+  }
+  if (pathname.startsWith('/training')) return 'training';
+  if (pathname.startsWith('/settings')) return 'settings';
+  return 'dashboard';
+}
+
+function MainNav() {
+  const router = useRouter();
+  const section = useSection();
   const { t } = useI18n();
 
-  let sectionKey = 'DASHBOARD';
-  let pageTitle = t('Dashboard', 'แดชบอร์ด');
+  const items: { key: Section; href: string; icon: ReactNode; label: string }[] = [
+    { key: 'dashboard', href: '/dashboard', icon: <DashboardIcon />, label: t('Dashboard', 'แดชบอร์ด') },
+    { key: 'single', href: '/cases?mode=single', icon: <ImageIcon />, label: t('Single image', 'ภาพเดี่ยว') },
+    { key: 'folder', href: '/cases?mode=folder', icon: <FolderIcon />, label: t('Folder / batch', 'ทั้งโฟลเดอร์') },
+    { key: 'results', href: '/cases?mode=results', icon: <FileTextIcon />, label: t('Results', 'ผลการประเมิน') },
+  ];
 
-  if (pathname.startsWith('/cases')) {
-    const mode = searchParams.get('mode');
-    if (mode === 'folder') {
-      sectionKey = 'FOLDER / BATCH ASSESSMENT';
-      pageTitle = t('Folder / Batch Assessment', 'ประเมินโฟลเดอร์ / ชุดข้อมูล');
-    } else if (mode === 'results') {
-      sectionKey = 'ASSESSMENT RESULTS';
-      pageTitle = t('Assessment Results', 'ผลการประเมิน');
-    } else if (pathname.includes('/cases/')) {
-      sectionKey = 'CASE REVIEW';
-      pageTitle = t('Case Review & Calibration', 'ตรวจผลและปรับแกนเคส');
-    } else {
-      sectionKey = 'SINGLE IMAGE ASSESSMENT';
-      pageTitle = t('Single Image Assessment', 'ประเมินภาพเดี่ยว');
-    }
-  } else if (pathname.startsWith('/batches')) {
-    sectionKey = 'BATCH PREVIEW';
-    pageTitle = t('Batch Preview', 'ภาพรวมชุดข้อมูล');
-  } else if (pathname.startsWith('/training')) {
-    sectionKey = 'MODEL DEVELOPMENT';
-    pageTitle = t('Model Development', 'พัฒนาโมเดล');
-  } else if (pathname.startsWith('/settings')) {
-    sectionKey = 'SETTINGS';
-    pageTitle = t('Settings', 'การตั้งค่า');
-  }
+  return (
+    <nav className="main-nav" aria-label={t('Main', 'เมนูหลัก')}>
+      {items.map((item) => (
+        <button
+          key={item.key}
+          type="button"
+          className={`nav-item ${section === item.key ? 'active' : ''}`}
+          aria-current={section === item.key ? 'page' : undefined}
+          onClick={() => router.push(item.href)}
+          title={item.label}
+        >
+          {item.icon}
+          <span>{item.label}</span>
+        </button>
+      ))}
+      <span className="nav-sep" aria-hidden="true" />
+      <button
+        type="button"
+        className={`nav-item ${section === 'training' ? 'active' : ''}`}
+        aria-current={section === 'training' ? 'page' : undefined}
+        onClick={() => router.push('/training')}
+        title={t('Model development', 'พัฒนาโมเดล')}
+      >
+        <TrainingIcon />
+        <span>{t('Model development', 'พัฒนาโมเดล')}</span>
+      </button>
+    </nav>
+  );
+}
+
+function PageHead() {
+  const section = useSection();
+  const { t } = useI18n();
+
+  const heads: Record<Section, [string, string]> = {
+    dashboard: [t('Overview', 'ภาพรวม'), t('Dashboard', 'แดชบอร์ด')],
+    single: [t('PD assessment', 'การประเมิน PD'), t('Single image assessment', 'ประเมินภาพเดี่ยว')],
+    folder: [t('PD assessment', 'การประเมิน PD'), t('Folder / batch assessment', 'ประเมินทั้งโฟลเดอร์')],
+    results: [t('PD assessment', 'การประเมิน PD'), t('Assessment results', 'ผลการประเมิน')],
+    training: [t('Models', 'โมเดล'), t('Model development', 'พัฒนาโมเดล')],
+    settings: [t('Account', 'บัญชี'), t('Settings', 'การตั้งค่า')],
+  };
+  const [eyebrow, title] = heads[section];
 
   return (
     <div className="page-head">
-      <p>PHASEPULSE / {sectionKey}</p>
-      <h1>{pageTitle}</h1>
+      <div className="page-head-inner">
+        <div>
+          <div className="eyebrow">PhasePulse · {eyebrow}</div>
+          <h1>{title}</h1>
+        </div>
+      </div>
     </div>
   );
 }
 
-function PageHeadBanner({ pathname }: { pathname: string }) {
-  return (
-    <Suspense
-      fallback={
-        <div className="page-head">
-          <p>PHASEPULSE</p>
-          <h1>PhasePulse</h1>
-        </div>
+function UserMenu({ onHelp }: { onHelp: () => void }) {
+  const router = useRouter();
+  const { user, signOut } = useApp();
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent | KeyboardEvent) => {
+      if (e instanceof KeyboardEvent ? e.key === 'Escape' : !ref.current?.contains(e.target as Node)) {
+        setOpen(false);
       }
-    >
-      <PageHeadContent pathname={pathname} />
-    </Suspense>
+    };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', close);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', close);
+    };
+  }, [open]);
+
+  if (!user) return null;
+  const initials = user.username.split('@')[0].slice(0, 2).toUpperCase();
+
+  function go(href: string) {
+    setOpen(false);
+    router.push(href);
+  }
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        className="avatar-btn"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={user.username}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {initials}
+      </button>
+      {open && (
+        <div className="menu" role="menu">
+          <div className="menu-head">
+            <b>{user.username}</b>
+            <span>{user.role}</span>
+          </div>
+          <button type="button" className="menu-item" role="menuitem" onClick={() => go('/settings')}>
+            <SettingsIcon />
+            {t('Settings', 'การตั้งค่า')}
+          </button>
+          <button
+            type="button"
+            className="menu-item"
+            role="menuitem"
+            onClick={() => go('/settings#password')}
+          >
+            <KeyIcon />
+            {t('Change password', 'เปลี่ยนรหัสผ่าน')}
+          </button>
+          <button
+            type="button"
+            className="menu-item"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onHelp();
+            }}
+          >
+            <HelpIcon />
+            {t('Help & reference', 'คู่มือการใช้งาน')}
+          </button>
+          <button
+            type="button"
+            className="menu-item danger"
+            role="menuitem"
+            onClick={() => void signOut()}
+          >
+            <SignOutIcon />
+            {t('Sign out', 'ออกจากระบบ')}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -99,11 +208,9 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const { user, ready, signOut } = useApp();
-  const { lang, toggleLang, t } = useI18n();
+  const { lang, setLang, t } = useI18n();
   const { isDark, toggleTheme } = useTheme();
-
   const [helpOpen, setHelpOpen] = useState(false);
-  const [assessmentOpen, setAssessmentOpen] = useState(false);
 
   useEffect(() => {
     if (ready && !user) router.replace('/login');
@@ -111,212 +218,96 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   if (!ready || !user) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-[13px] text-slate-400">
+      <div className="flex min-h-screen items-center justify-center gap-3 text-muted">
+        <span className="spinner" />
         {t('Loading…', 'กำลังโหลด…')}
       </div>
     );
   }
 
-  const isCasesActive = pathname.startsWith('/cases') || pathname.startsWith('/batches');
-  const isDashboardActive = pathname === '/dashboard' || pathname === '/';
-  const isTrainingActive = pathname.startsWith('/training');
-
-  const avatarInitial = user.username
-    ? user.username.split('@')[0].slice(0, 2).toUpperCase()
-    : 'NR';
-
   return (
-    <div className={`app ${isDark ? 'dark' : ''}`}>
+    <div className="app">
       <header className="topbar">
-        {/* Brand */}
-        <button
-          className="brand"
-          onClick={() => router.push('/dashboard')}
-          type="button"
-        >
-          <span>
-            <ActivityIcon width={22} height={22} />
+        <button className="brand" onClick={() => router.push('/dashboard')} type="button">
+          <span className="brand-mark">
+            <ActivityIcon width={20} height={20} />
           </span>
-          <b>
+          <span className="brand-name">
             PhasePulse
-            <small>{t('Partial Discharge Analysis Platform', 'แพลตฟอร์มวิเคราะห์ Partial Discharge')}</small>
-          </b>
+            <small>{t('Partial discharge analysis', 'วิเคราะห์ Partial Discharge')}</small>
+          </span>
         </button>
 
-        {/* Main Navigation */}
-        <nav className="main-nav">
-          <button
-            type="button"
-            className={isDashboardActive ? 'active' : ''}
-            onClick={() => router.push('/dashboard')}
-          >
-            <DashboardIcon width={17} height={17} />
-            <span>{t('Dashboard', 'แดชบอร์ด')}</span>
-          </button>
+        <Suspense fallback={<nav className="main-nav" />}>
+          <MainNav />
+        </Suspense>
 
-          {/* Assessment Dropdown */}
-          <div
-            className={`nav-menu ${isCasesActive ? 'active' : ''}`}
-            onMouseEnter={() => setAssessmentOpen(true)}
-            onMouseLeave={() => setAssessmentOpen(false)}
-          >
-            <button
-              type="button"
-              className="nav-menu-trigger"
-              onClick={() => router.push('/cases?mode=single')}
-            >
-              <ImageIcon width={17} height={17} />
-              <span>{t('PD Assessment', 'การประเมิน PD')}</span>
-              <ChevronDownIcon width={14} height={14} />
-            </button>
-
-            <div className={`nav-dropdown ${assessmentOpen ? 'block' : ''}`}>
-              <button
-                type="button"
-                onClick={() => {
-                  setAssessmentOpen(false);
-                  router.push('/cases?mode=single');
-                }}
-              >
-                <ImageIcon width={18} height={18} className="text-sky-500" />
-                <span>
-                  <b>{t('Single Image', 'ภาพเดี่ยว')}</b>
-                  <small>{t('PRPD or PRPD + TF Map', 'PRPD หรือ PRPD + TF Map')}</small>
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setAssessmentOpen(false);
-                  router.push('/cases?mode=folder');
-                }}
-              >
-                <FolderIcon width={18} height={18} className="text-amber-500" />
-                <span>
-                  <b>{t('Folder / Batch', 'โฟลเดอร์ / ชุดข้อมูล')}</b>
-                  <small>{t('Pair and review up to 500 images', 'จับคู่และตรวจได้สูงสุด 500 ภาพ')}</small>
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setAssessmentOpen(false);
-                  router.push('/cases?mode=results');
-                }}
-              >
-                <FileTextIcon width={18} height={18} className="text-emerald-500" />
-                <span>
-                  <b>{t('Results', 'ผลลัพธ์')}</b>
-                  <small>{t('Cases, details and exports', 'เคส รายละเอียด และการส่งออก')}</small>
-                </span>
-              </button>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            className={isTrainingActive ? 'active' : ''}
-            onClick={() => router.push('/training')}
-          >
-            <TrainingIcon width={17} height={17} />
-            <span>{t('Model Development', 'พัฒนาโมเดล')}</span>
-          </button>
-        </nav>
-
-        {/* Tools on Right */}
         <div className="tools">
           <button
             type="button"
+            className="tool-btn hide-sm"
             onClick={() => setHelpOpen(true)}
-            title={t('Help / Documentation', 'ช่วยเหลือ / เอกสารประกอบ')}
+            title={t('Help & reference', 'คู่มือการใช้งาน')}
           >
-            <HelpIcon width={17} height={17} />
-            <span className="hidden sm:inline">{t('Help', 'ช่วยเหลือ')}</span>
+            <HelpIcon />
           </button>
 
-          <button
-            type="button"
-            className={pathname.startsWith('/settings') ? 'active' : ''}
-            onClick={() => router.push('/settings')}
-            aria-label={t('Settings', 'การตั้งค่า')}
-            title={t('Settings', 'การตั้งค่า')}
-          >
-            <SettingsIcon width={17} height={17} />
-          </button>
-
-          {/* Language Switcher */}
-          <button
-            type="button"
-            onClick={toggleLang}
-            title={t('Switch to Thai', 'เปลี่ยนเป็นภาษาอังกฤษ')}
-            className="flex items-center gap-1 font-semibold"
-          >
-            <LanguagesIcon width={16} height={16} />
-            <span>{lang.toUpperCase()}</span>
-          </button>
-
-          {/* Theme Toggle */}
-          <button
-            type="button"
-            onClick={toggleTheme}
-            title={isDark ? t('Switch to Light Mode', 'เปลี่ยนเป็นโหมดสว่าง') : t('Switch to Dark Mode', 'เปลี่ยนเป็นโหมดมืด')}
-          >
-            {isDark ? <SunIcon width={17} height={17} /> : <MoonIcon width={17} height={17} />}
-          </button>
-
-          {/* Sign Out */}
-          <button
-            type="button"
-            onClick={() => void signOut()}
-            title={t('Log out', 'ออกจากระบบ')}
-            aria-label={t('Log out', 'ออกจากระบบ')}
-          >
-            <SignOutIcon width={17} height={17} />
-          </button>
-
-          {/* User Profile Avatar */}
-          <button
-            type="button"
-            className="profile-button"
-            onClick={() => router.push('/dashboard')}
-            title={`${user.username} (${user.role})`}
-          >
-            {avatarInitial}
-          </button>
-
-          {/* Institution logos */}
-          <div className="hero-logo-row hidden xl:flex items-center gap-2 pl-2 border-l border-white/20">
-            {INSTITUTION_LOGOS.map(({ src, alt, title }) => (
-              <div
-                className="flex h-8 items-center justify-center rounded bg-white/95 px-2 py-0.5 shadow-sm"
-                key={src}
-                title={title}
-              >
-                <img src={src} alt={alt} className="h-6 w-auto object-contain" />
-              </div>
-            ))}
+          <div className="lang-switch" role="group" aria-label={t('Language', 'ภาษา')}>
+            <button type="button" className={lang === 'en' ? 'on' : ''} onClick={() => setLang('en')}>
+              EN
+            </button>
+            <button type="button" className={lang === 'th' ? 'on' : ''} onClick={() => setLang('th')}>
+              TH
+            </button>
           </div>
+
+          <button
+            type="button"
+            className="tool-btn"
+            onClick={toggleTheme}
+            title={isDark ? t('Switch to light mode', 'เปลี่ยนเป็นโหมดสว่าง') : t('Switch to dark mode', 'เปลี่ยนเป็นโหมดมืด')}
+            aria-label={isDark ? t('Switch to light mode', 'เปลี่ยนเป็นโหมดสว่าง') : t('Switch to dark mode', 'เปลี่ยนเป็นโหมดมืด')}
+          >
+            {isDark ? <SunIcon /> : <MoonIcon />}
+          </button>
+
+          <button
+            type="button"
+            className={`tool-btn hide-sm ${pathname.startsWith('/settings') ? 'active' : ''}`}
+            onClick={() => router.push('/settings')}
+            title={t('Settings', 'การตั้งค่า')}
+            aria-label={t('Settings', 'การตั้งค่า')}
+          >
+            <SettingsIcon />
+          </button>
+
+          <UserMenu onHelp={() => setHelpOpen(true)} />
         </div>
       </header>
 
-      {/* Page Breadcrumb / Heading Bar */}
-      <PageHeadBanner pathname={pathname} />
+      <Suspense fallback={<div className="page-head" />}>
+        <PageHead />
+      </Suspense>
 
       <main className="content">{children}</main>
 
-      <footer className="note">
-        <div className="mx-auto max-w-[840px] rounded-md border border-[#FDE68A] bg-amber-50 dark:bg-amber-950/40 dark:border-amber-800/60 px-[14px] py-[9px] text-[12px] font-semibold leading-[1.5] text-amber-700 dark:text-amber-300">
-          {t(
-            'AI results are a preliminary assessment, not a diagnosis. Verify every case against the measurement data and confirm with a qualified engineer before making an engineering decision.',
-            'ผลการประเมินจาก AI เป็นเพียงการวิเคราะห์เบื้องต้นไม่ใช่การวินิจฉัยขั้นสุดท้าย กรุณาตรวจสอบกับข้อมูลการวัดและยืนยันร่วมกับวิศวกรผู้เชี่ยวชาญก่อนตัดสินใจทางวิศวกรรม'
-          )}
-        </div>
-        <div className="mt-3 flex flex-wrap items-center justify-center gap-4 text-xs text-slate-400">
-          <span>PhasePulse: Partial Discharge Analysis Platform</span>
-          <span>•</span>
-          <span>KMUTNB • Faculty of Engineering • ECE</span>
+      <footer className="site-foot">
+        <div className="site-foot-inner">
+          <p className="disclaimer">
+            <AlertIcon />
+            {t(
+              'AI results are a preliminary assessment, not a diagnosis. Verify each case against the measurement data and confirm with a qualified engineer before any engineering decision.',
+              'ผลจาก AI เป็นการประเมินเบื้องต้น ไม่ใช่การวินิจฉัย ตรวจทุกเคสกับข้อมูลการวัดและยืนยันกับวิศวกรผู้มีคุณสมบัติก่อนตัดสินใจทางวิศวกรรม',
+            )}
+          </p>
+          <div className="logo-row">
+            {INSTITUTION_LOGOS.map(({ src, alt, title }) => (
+              <span key={src} title={title}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={src} alt={alt} />
+              </span>
+            ))}
+          </div>
         </div>
       </footer>
 

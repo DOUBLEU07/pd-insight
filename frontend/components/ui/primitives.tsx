@@ -1,8 +1,12 @@
-import type { ReactNode } from 'react';
+'use client';
 
+import type { CSSProperties, ReactNode } from 'react';
+
+import { CheckIcon, ChevronRightIcon } from '@/components/ui/icons';
+import { useI18n } from '@/lib/i18n';
 import type { CaseStatus } from '@/lib/types';
 
-/** Colour mapping for the three severity levels, matching the prototype. */
+/** Colour mapping for the three severity levels. */
 export function severityPillClass(severity: string | null | undefined): string {
   if (severity === 'High') return 'pill-red';
   if (severity === 'Moderate') return 'pill-amber';
@@ -14,7 +18,7 @@ export function resultPillClass(result: string | null | undefined): string {
   if (result === 'Non-identified' || result === 'Inconclusive') return 'pill-amber';
   if (result === 'Mixed PD Suspected') return 'pill-red';
   if (!result) return 'pill-gray';
-  return 'pill-green';
+  return 'pill-blue';
 }
 
 export function Pill({ tone, children }: { tone: string; children: ReactNode }) {
@@ -22,9 +26,15 @@ export function Pill({ tone, children }: { tone: string; children: ReactNode }) 
 }
 
 export function StatusBadge({ status }: { status: CaseStatus }) {
-  const label = status === 'done' ? 'Done' : status === 'in_review' ? 'In review' : 'Pending';
+  const { t } = useI18n();
+  const label =
+    status === 'done'
+      ? t('Reviewed', 'ตรวจแล้ว')
+      : status === 'in_review'
+        ? t('In review', 'กำลังตรวจ')
+        : t('Pending', 'รอตรวจ');
   return (
-    <span className={`status-${status} status-badge`}>
+    <span className={`status-badge status-${status}`}>
       <span className="status-dot" />
       {label}
     </span>
@@ -42,46 +52,17 @@ export function fmt(value: number | null | undefined, digits = 2, suffix = ''): 
   return `${value.toFixed(digits)}${suffix}`;
 }
 
-export function fmtDate(value: string | null | undefined): string {
+export function fmtDate(value: string | null | undefined, locale = 'en-GB'): string {
   if (!value) return '-';
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleString('en-GB', {
+  return d.toLocaleString(locale, {
     year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
+    month: 'short',
+    day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
   });
-}
-
-export function Card({
-  title,
-  hint,
-  right,
-  children,
-  className = '',
-  bodyClassName = '',
-}: {
-  title?: ReactNode;
-  hint?: ReactNode;
-  right?: ReactNode;
-  children: ReactNode;
-  className?: string;
-  bodyClassName?: string;
-}) {
-  return (
-    <div className={`card ${className}`}>
-      {title && (
-        <h2 className="justify-between">
-          <span className="flex items-center gap-[10px]">{title}</span>
-          {right}
-        </h2>
-      )}
-      {hint && <p className="hint">{hint}</p>}
-      <div className={bodyClassName}>{children}</div>
-    </div>
-  );
 }
 
 export function KV({ rows }: { rows: [ReactNode, ReactNode][] }) {
@@ -102,16 +83,17 @@ export function KV({ rows }: { rows: [ReactNode, ReactNode][] }) {
 export function Readout({
   label,
   value,
-  valueClass = '',
+  text = false,
 }: {
-  label: string;
+  label: ReactNode;
   value: ReactNode;
-  valueClass?: string;
+  /** Set for words rather than measured numbers, so they are not set in mono. */
+  text?: boolean;
 }) {
   return (
-    <div className="readout-box">
+    <div className="readout">
       <div className="lbl">{label}</div>
-      <div className={`val ${valueClass}`}>{value}</div>
+      <div className={`val ${text ? 'text' : ''}`}>{value}</div>
     </div>
   );
 }
@@ -119,18 +101,86 @@ export function Readout({
 export function EmptyRow({ colSpan, children }: { colSpan: number; children: ReactNode }) {
   return (
     <tr>
-      <td colSpan={colSpan} className="text-slate-400">
+      <td colSpan={colSpan} className="empty">
         {children}
       </td>
     </tr>
   );
 }
 
-export function Spinner({ label = 'Loading…' }: { label?: string }) {
+export function Spinner({ label }: { label?: string }) {
+  const { t } = useI18n();
   return (
-    <div className="flex items-center gap-3 py-10 text-[13px] text-slate-400">
-      <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-brand-500" />
-      {label}
+    <div className="flex items-center gap-3 py-10 text-[14.5px] text-muted">
+      <span className="spinner" />
+      {label ?? t('Loading…', 'กำลังโหลด…')}
+    </div>
+  );
+}
+
+/** A native <details> section, so long reference data stays folded away. */
+export function Collapse({
+  title,
+  meta,
+  children,
+  defaultOpen = false,
+  flat = false,
+  id,
+}: {
+  title: ReactNode;
+  meta?: ReactNode;
+  children: ReactNode;
+  defaultOpen?: boolean;
+  flat?: boolean;
+  id?: string;
+}) {
+  return (
+    <details className={`fold ${flat ? 'flat' : ''}`} open={defaultOpen} id={id}>
+      <summary>
+        <ChevronRightIcon className="chev" />
+        <span>{title}</span>
+        {meta && <span className="summary-meta">{meta}</span>}
+      </summary>
+      <div className="fold-body">{children}</div>
+    </details>
+  );
+}
+
+/** The green check that pops in when a file lands. Re-keyed by the caller to replay. */
+export function DoneBadge({ small = false, animate = true }: { small?: boolean; animate?: boolean }) {
+  return (
+    <span className={`done-badge ${small ? 'sm' : ''} ${animate ? 'animate' : ''}`} aria-hidden="true">
+      <CheckIcon />
+    </span>
+  );
+}
+
+/**
+ * Confirmation strip shown once images have been read in: a PD pulse trace
+ * draws itself, then the count. The only decorative motion in the app.
+ */
+export function UploadBanner({ title, detail }: { title: ReactNode; detail?: ReactNode }) {
+  return (
+    <div className="upload-banner" role="status">
+      <svg className="pulse-trace" viewBox="0 0 56 22" aria-hidden="true">
+        <path
+          d="M1 11 H14 L18 3 L23 19 L28 7 L32 15 L35 11 H43 L46 14 L49 5 L55 11"
+          style={{ ['--len' as string]: 120 }}
+        />
+      </svg>
+      <DoneBadge small />
+      <span>
+        {title}
+        {detail && <small>{detail}</small>}
+      </span>
+    </div>
+  );
+}
+
+export function Meter({ value, accent }: { value: number; accent?: string }) {
+  return (
+    <div className="meter" style={accent ? ({ ['--accent' as string]: accent } as CSSProperties) : undefined}>
+      <i style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
     </div>
   );
 }

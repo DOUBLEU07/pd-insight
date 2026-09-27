@@ -369,9 +369,9 @@ class TrainedModel(Base):
     max_epochs: Mapped[int] = mapped_column(Integer, default=12)
     batch_size: Mapped[int] = mapped_column(Integer, default=16)
     learning_rate: Mapped[float] = mapped_column(Float, default=0.001)
-    # "scratch" trains the small CNN from random weights; "mobilenetv2"
-    # fine-tunes the ImageNet backbone when its weights can be fetched.
-    backbone: Mapped[str] = mapped_column(String(24), default="scratch")
+    # "mobilenetv2" is the only backbone new runs use. "scratch" (the removed
+    # compact CNN) survives only on rows created before it was dropped.
+    backbone: Mapped[str] = mapped_column(String(24), default="mobilenetv2")
 
     # ---- result ----
     # Epochs actually run, which early stopping may cut below max_epochs.

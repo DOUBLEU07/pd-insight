@@ -15,8 +15,8 @@ export default function Home() {
   }, [ready, user, router]);
 
   return (
-    <div className="flex min-h-screen items-center justify-center text-[13px] text-slate-400">
-      Loading…
+    <div className="flex min-h-screen items-center justify-center gap-3 text-muted">
+      <span className="spinner" />
     </div>
   );
 }

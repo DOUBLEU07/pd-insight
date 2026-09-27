@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Any
 
@@ -134,6 +135,7 @@ def create_batch(
 async def upload_folder(
     batch_id: int,
     files: list[UploadFile] = File(...),
+    preset_id: int | None = Form(None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
@@ -141,8 +143,14 @@ async def upload_folder(
 
     Files are paired by case key: `<case>_PRPD.jpg` + `<case>_TF.jpg` become one
     Hybrid case, an unpaired PRPD becomes a PRPD-only case.
+
+    `preset_id` pins one saved axis preset for the whole folder. It is applied
+    to every image of the preset's size; images of any other size fall back to
+    the usual preset -> default -> auto-detect resolution when analysed.
     """
     batch = owned_batch(db, batch_id, user)
+    preset = owned_preset(db, preset_id, user) if preset_id is not None else None
+    preset_applied = 0
 
     buckets: dict[str, dict[str, tuple[str, bytes]]] = {}
     rejected: list[dict[str, str]] = []
@@ -175,7 +183,7 @@ async def upload_folder(
         tf_entry = slots.get("tf")
 
         try:
-            decode_image(prpd_bytes)
+            prpd_height, prpd_width = decode_image(prpd_bytes).shape[:2]
             if tf_entry:
                 decode_image(tf_entry[1])
         except ValueError as exc:
@@ -219,6 +227,24 @@ async def upload_folder(
             case.source_tf_path = tf_entry[0]
 
         case.result_folder = to_storage_rel(case_result_dir(base_name))
+
+        # Analysis only resolves the axes when none are set yet, so writing
+        # the preset here is what makes it stick for this folder.
+        if (
+            preset is not None
+            and preset.image_width == prpd_width
+            and preset.image_height == prpd_height
+        ):
+            case.x_left_0deg = preset.x_left_0deg
+            case.x_right_360deg = preset.x_right_360deg
+            case.y_top_plot = preset.y_top_plot
+            case.y_bottom_plot = preset.y_bottom_plot
+            case.calibration_source = "saved_calibration_preset_auto_loaded"
+            case.calibration_mode = "Use default PDProcessingII calibration"
+            case.calibration_preset_loaded = True
+            case.calibration_preset_path = preset.preset_name
+            preset_applied += 1
+
         created.append(serialize_case(case))
 
     log_usage(
@@ -229,7 +255,12 @@ async def upload_folder(
     )
     db.commit()
 
-    return {"created": created, "rejected": rejected, "batch": _batch_summary(batch)}
+    return {
+        "created": created,
+        "rejected": rejected,
+        "batch": _batch_summary(batch),
+        "preset_applied": preset_applied,
+    }
 
 
 @router.get("/batches/{batch_id}")
@@ -315,9 +346,17 @@ def dashboard(
         )
     )
 
+    reviewed = sum(1 for c in cases if c.status == "done")
+    high = sum(1 for c in cases if _severity_bucket(c) == "High")
+
     return {
         "kpi": {
             "total": total,
+            "reviewed": reviewed,
+            "reviewed_pct": pct(reviewed),
+            "to_review": total - reviewed,
+            "high_severity": high,
+            "batches": len(batches),
             "corona": corona,
             "corona_pct": pct(corona),
             "surface": surface,
@@ -327,7 +366,7 @@ def dashboard(
         },
         "severity_groups": groups,
         "upload_history": history,
-        "reviewed_count": sum(1 for c in cases if c.status == "done"),
+        "reviewed_count": reviewed,
     }
 
 

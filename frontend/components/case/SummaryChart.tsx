@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 
+import { useI18n } from '@/lib/i18n';
 import type { PdCase } from '@/lib/types';
 
 /**
@@ -20,6 +21,7 @@ export function SummaryChart({
   width?: number;
   height?: number;
 }) {
+  const { t } = useI18n();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
 
@@ -43,17 +45,17 @@ export function SummaryChart({
 
     ctx.textAlign = 'center';
     ctx.fillStyle = '#1E293B';
-    ctx.font = '11px "Courier New", monospace';
+    ctx.font = '500 12px "IBM Plex Mono", monospace';
     ctx.fillText(pdCase.prpd_filename ?? `${pdCase.case_base_name}_PRPD.png`, w / 2, 16);
     ctx.fillText(
-      `Top class: ${top}${topScore != null ? ` (${topScore.toFixed(2)}%)` : ''} | ` +
-        `PD source: ${pdCase.confirmed_pd_source_type ?? '-'}`,
+      `${t('Top class', 'คลาสสูงสุด')}: ${top}${topScore != null ? ` (${topScore.toFixed(2)}%)` : ''} | ` +
+        `${t('PD source', 'แหล่ง PD')}: ${pdCase.confirmed_pd_source_type ?? '-'}`,
       w / 2,
       32,
     );
     ctx.fillText(
-      `Gap angle = ${gap.gap_angle_deg?.toFixed(4) ?? '-'} deg | ` +
-        `Gap time = ${gap.gap_time_ms?.toFixed(4) ?? '-'} ms | ` +
+      `Gap angle = ${gap.gap_angle_deg?.toFixed(2) ?? '-'}° | ` +
+        `Gap-Time = ${gap.gap_time_ms?.toFixed(3) ?? '-'} ms | ` +
         `Band = ${gap.gap_time_band ?? '-'} | Severity = ${pdCase.severity_by_gap_time ?? '-'}`,
       w / 2,
       48,
@@ -169,30 +171,30 @@ export function SummaryChart({
 
     // ---- axes ----
     ctx.fillStyle = '#64748B';
-    ctx.font = '10px Kanit, sans-serif';
+    ctx.font = '12px "IBM Plex Sans Thai", sans-serif';
     ctx.textAlign = 'center';
     [0, 90, 180, 270, 360].forEach((p) => {
       ctx.fillText(String(p), phaseX(p), frame.y_bottom + 16);
     });
-    ctx.fillText('Phase [°]', (frame.x_left + frame.x_right) / 2, h - 8);
+    ctx.fillText(t('Phase [°]', 'เฟส [°]'), (frame.x_left + frame.x_right) / 2, Math.min(h - 8, frame.y_bottom + 36));
 
     ctx.save();
-    ctx.translate(16, midY);
+    ctx.translate(Math.max(14, imgX - 14), midY);
     ctx.rotate(-Math.PI / 2);
     ctx.textAlign = 'center';
-    ctx.fillText('Amplitude', 0, 0);
+    ctx.fillText(t('Amplitude', 'แอมพลิจูด'), 0, 0);
     ctx.restore();
     ctx.textAlign = 'left';
 
     // ---- legend ----
     const legend = [
-      { label: 'Current plot frame', color: '#F59E0B', dash: [6, 3] },
-      { label: '0 / 360 deg', color: '#3B82F6', dash: [5, 3] },
-      { label: '90/180/270 deg', color: '#94A3B8', dash: [2, 3] },
-      { label: 'Left gap line', color: '#DC2626', dash: [] as number[] },
-      { label: 'Right gap line', color: '#16A34A', dash: [] as number[] },
+      { label: t('Plot frame', 'กรอบกราฟ'), color: '#F59E0B', dash: [6, 3] },
+      { label: '0° / 360°', color: '#3B82F6', dash: [5, 3] },
+      { label: '90° / 180° / 270°', color: '#94A3B8', dash: [2, 3] },
+      { label: t('Left gap line', 'เส้น Gap ซ้าย'), color: '#DC2626', dash: [] as number[] },
+      { label: t('Right gap line', 'เส้น Gap ขวา'), color: '#16A34A', dash: [] as number[] },
     ];
-    const boxW = 152;
+    const boxW = 168;
     const boxH = legend.length * 16 + 12;
     const boxX = frame.x_right - boxW - 6;
     const boxY = frame.y_top + 6;
@@ -214,10 +216,10 @@ export function SummaryChart({
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = '#334155';
-      ctx.font = '10px Kanit, sans-serif';
-      ctx.fillText(it.label, boxX + 34, ly + 3);
+      ctx.font = '12px "IBM Plex Sans Thai", sans-serif';
+      ctx.fillText(it.label, boxX + 34, ly + 4);
     });
-  }, [pdCase]);
+  }, [pdCase, t]);
 
   useEffect(() => {
     if (!imageUrl) {
@@ -243,8 +245,14 @@ export function SummaryChart({
   }, [draw]);
 
   return (
-    <div className="canvas-wrap">
-      <canvas ref={canvasRef} width={width} height={height} id="summary-canvas" />
+    <div className="canvas-box">
+      <canvas
+        ref={canvasRef}
+        width={width}
+        height={height}
+        id="summary-canvas"
+        style={{ width: '100%', maxWidth: width, height: 'auto' }}
+      />
     </div>
   );
 }

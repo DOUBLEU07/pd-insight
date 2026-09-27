@@ -1,17 +1,23 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
+import { ChangePassword } from '@/components/settings/ChangePassword';
+import { PresetManager } from '@/components/settings/PresetManager';
 import { ThresholdsPanel } from '@/components/settings/ThresholdsPanel';
-import { KV, Spinner, fmtDate } from '@/components/ui/primitives';
+import { KeyIcon, MonitorIcon, MoonIcon, SlidersIcon, SunIcon, UserIcon } from '@/components/ui/icons';
+import { Collapse, KV, Spinner, fmtDate } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/app-context';
+import { useI18n } from '@/lib/i18n';
+import { useTheme, type Theme } from '@/lib/theme';
 import type { TrainedModel } from '@/lib/types';
 
 export default function SettingsPage() {
   const { options, user, toast } = useApp();
+  const { t, lang, setLang, locale } = useI18n();
+  const { theme, setTheme } = useTheme();
 
-  // Models this account trained for itself, and which one analyses its cases.
   const [models, setModels] = useState<TrainedModel[] | null>(null);
   const [switching, setSwitching] = useState(false);
 
@@ -27,6 +33,19 @@ export default function SettingsPage() {
     void loadModels();
   }, [loadModels]);
 
+  // Deep links from the account menu (#password) and elsewhere (#presets).
+  useEffect(() => {
+    const id = window.location.hash.slice(1);
+    if (!id) return;
+    const timer = setTimeout(() => {
+      const el = document.getElementById(id);
+      if (el instanceof HTMLDetailsElement) el.open = true;
+      el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (id === 'password') document.getElementById('pw-current')?.focus({ preventScroll: true });
+    }, 150);
+    return () => clearTimeout(timer);
+  }, []);
+
   async function selectModel(model: TrainedModel | null) {
     setSwitching(true);
     try {
@@ -35,89 +54,111 @@ export default function SettingsPage() {
       await loadModels();
       toast(
         model
-          ? `New cases will be analysed with ${model.name}`
-          : 'New cases will be analysed with the published models',
+          ? t(`New cases will be analysed with ${model.name}`, `เคสใหม่จะวิเคราะห์ด้วย ${model.name}`)
+          : t('New cases will be analysed with the published models', 'เคสใหม่จะวิเคราะห์ด้วยโมเดลตั้งต้น'),
       );
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Could not change the analysis model');
+      toast(e instanceof Error ? e.message : t('Could not change the analysis model', 'เปลี่ยนโมเดลไม่สำเร็จ'));
     } finally {
       setSwitching(false);
     }
   }
 
-  if (!options) return <Spinner label="Loading settings…" />;
+  if (!options) return <Spinner />;
 
   const ml = options.ml_status;
   const c = options.constants;
-
   const selectable = (models ?? []).filter((m) => m.can_activate);
-  const unselectable = (models ?? []).filter(
-    (m) => m.status === 'completed' && !m.can_activate,
-  );
   const selected = selectable.find((m) => m.is_active) ?? null;
 
   const yesNo = (v: boolean) => (
-    <span className={`pill ${v ? 'pill-green' : 'pill-red'}`}>{v ? 'Available' : 'Missing'}</span>
+    <span className={`pill ${v ? 'pill-green' : 'pill-red'}`}>{v ? t('Available', 'พร้อมใช้') : t('Missing', 'ไม่พบ')}</span>
   );
 
+  const themes: { key: Theme; icon: ReactNode; label: string }[] = [
+    { key: 'auto', icon: <MonitorIcon />, label: t('Auto (by time)', 'อัตโนมัติ (ตามเวลา)') },
+    { key: 'light', icon: <SunIcon />, label: t('Light', 'สว่าง') },
+    { key: 'dark', icon: <MoonIcon />, label: t('Dark', 'มืด') },
+  ];
+
   return (
-    <>
-      <div className="card">
-        <h2>Account</h2>
-        <KV
-          rows={[
-            ['Username', user?.username ?? '-'],
-            ['Role', <span className="capitalize" key="r">{user?.role ?? '-'}</span>],
-            [
-              'Role behaviour',
-              'Recorded as reviewer_role on every case you sign off. It does not restrict any action.',
-            ],
-          ]}
-        />
+    <div className="stack">
+      <div className="grid-2 items-start">
+        <section className="card">
+          <h2 className="card-title mb-3">
+            <SlidersIcon />
+            {t('Preferences', 'การแสดงผล')}
+          </h2>
+          <div className="field">
+            <span className="label">{t('Theme', 'ธีม')}</span>
+            <div className="seg" role="group" aria-label={t('Theme', 'ธีม')}>
+              {themes.map((th) => (
+                <button key={th.key} type="button" className={theme === th.key ? 'on' : ''} onClick={() => setTheme(th.key)}>
+                  {th.icon}
+                  {th.label}
+                </button>
+              ))}
+            </div>
+            <p className="field-help">
+              {t('Auto switches to dark between 18:00 and 06:00.', 'อัตโนมัติจะเป็นโหมดมืดระหว่าง 18:00–06:00')}
+            </p>
+          </div>
+          <div className="field">
+            <span className="label">{t('Language', 'ภาษา')}</span>
+            <div className="seg" role="group" aria-label={t('Language', 'ภาษา')}>
+              <button type="button" className={lang === 'en' ? 'on' : ''} onClick={() => setLang('en')}>
+                English
+              </button>
+              <button type="button" className={lang === 'th' ? 'on' : ''} onClick={() => setLang('th')}>
+                ไทย
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-5 border-t border-line pt-4">
+            <h3 className="section-title flex items-center gap-2">
+              <UserIcon width={17} height={17} className="text-primary-ink" />
+              {t('Account', 'บัญชี')}
+            </h3>
+            <KV
+              rows={[
+                [t('Username', 'ชื่อผู้ใช้'), <b key="u">{user?.username ?? '-'}</b>],
+                [t('Role', 'บทบาท'), <span className="capitalize" key="r">{user?.role ?? '-'}</span>],
+              ]}
+            />
+            <p className="field-help">
+              {t(
+                'Your role is recorded on every case you sign off. It does not limit what you can do.',
+                'บทบาทจะถูกบันทึกในทุกเคสที่คุณยืนยัน และไม่จำกัดสิทธิ์การใช้งาน',
+              )}
+            </p>
+          </div>
+        </section>
+
+        <section className="card" id="password">
+          <h2 className="card-title mb-3">
+            <KeyIcon />
+            {t('Change password', 'เปลี่ยนรหัสผ่าน')}
+          </h2>
+          <ChangePassword />
+        </section>
       </div>
 
-      <div className="card">
-        <h2>Model Status</h2>
-        <p className="hint">
-          Real inference needs both TensorFlow and the .keras files. When either is missing the
-          system falls back to a deterministic mock engine and marks each case accordingly.
-        </p>
-        <KV
-          rows={[
-            ['ML enabled', yesNo(ml.enable_ml)],
-            ['TensorFlow', yesNo(ml.tensorflow_available)],
-            ['PRPD-only model (Model 2)', yesNo(ml.prpd_only_available)],
-            ['Hybrid model (Model 3)', yesNo(ml.hybrid_available)],
-            ['Auto Gap-time model', yesNo(ml.auto_gap_available)],
-            ['Auto Gap-time version', ml.auto_gap_model_version],
-            ['Models directory', <code key="d">{ml.models_dir}</code>],
-            ...(ml.load_error
-              ? ([['Load error', <span className="text-red-700" key="e">{ml.load_error}</span>]] as [
-                  string,
-                  React.ReactNode,
-                ][])
-              : []),
-          ]}
-        />
-      </div>
-
-      <div className="card">
-        <h2>
-          Analysis Model{' '}
-          <span className="text-[11px] font-medium text-slate-400">this account only</span>
+      <section className="card">
+        <h2 className="card-title">
+          {t('Analysis model', 'โมเดลที่ใช้วิเคราะห์')} <span className="tag">{t('this account', 'บัญชีนี้')}</span>
         </h2>
-        <p className="hint">
-          Which model classifies your cases. Models you build on the Model Training page appear
-          here, and are visible to your account alone. Changing this takes effect the next time a
-          case is analysed; cases already signed off keep the model they were scored with until you
-          re-run them.
+        <p className="card-sub mb-3">
+          {t(
+            'Applies the next time a case is analysed. Signed-off cases keep the model they were scored with.',
+            'มีผลกับการวิเคราะห์ครั้งถัดไป เคสที่ยืนยันแล้วยังใช้ผลจากโมเดลเดิม',
+          )}
         </p>
-
         {models === null ? (
-          <Spinner label="Loading your models…" />
+          <Spinner />
         ) : (
-          <div className="space-y-[10px]">
-            <label className={`consent-item ${selected === null ? 'checked' : ''}`}>
+          <div className="grid gap-2 md:grid-cols-2">
+            <label className={`option-card ${selected === null ? 'on' : ''}`}>
               <input
                 type="radio"
                 name="analysis-model"
@@ -126,19 +167,17 @@ export default function SettingsPage() {
                 onChange={() => void selectModel(null)}
               />
               <span>
-                <span className="lbl">Published models (default)</span>
+                <span className="lbl">{t('Published models (default)', 'โมเดลตั้งต้น (ค่าเริ่มต้น)')}</span>
                 <span className="desc">
-                  Model 2 (PRPD_2_Only) for PRPD-only cases and Model 3 (PRPD_3_Hybrid) when a T-F
-                  map is uploaded, as exported from Colab.
+                  {t(
+                    'PRPD_2_Only for a PRPD image, PRPD_3_Hybrid when a TF map is added.',
+                    'PRPD_2_Only สำหรับภาพ PRPD และ PRPD_3_Hybrid เมื่อมี TF Map',
+                  )}
                 </span>
               </span>
             </label>
-
             {selectable.map((m) => (
-              <label
-                key={m.id}
-                className={`consent-item ${m.is_active ? 'checked' : ''}`}
-              >
+              <label key={m.id} className={`option-card ${m.is_active ? 'on' : ''}`}>
                 <input
                   type="radio"
                   name="analysis-model"
@@ -148,102 +187,100 @@ export default function SettingsPage() {
                 />
                 <span>
                   <span className="lbl">
-                    {m.name}{' '}
-                    <span className="text-[11px] font-medium text-slate-400">
-                      {m.kind_label}
-                    </span>
+                    {m.name} <span className="tag">{m.kind_label}</span>
                   </span>
                   <span className="desc">
-                    {m.accuracy}% accuracy on {m.dataset_size} sample(s), trained{' '}
-                    {fmtDate(m.finished_at)}. Used when a case matches its input mode
-                    {m.kind === 'hybrid'
-                      ? ' (PRPD with a T-F map); PRPD-only cases fall back to Model 2.'
-                      : ' (PRPD alone); cases with a T-F map fall back to Model 3.'}
-                    {!m.uses_published_classes && (
-                      <>
-                        {' '}
-                        Predicts <b>{m.class_names.join(', ')}</b>, reported as{' '}
-                        {m.class_names.map((c) => m.pd_sources[c]).join(', ')}.
-                      </>
+                    {t(
+                      `${m.accuracy}% test accuracy · ${m.dataset_size} samples · trained ${fmtDate(m.finished_at, locale)}`,
+                      `ความแม่นยำ ${m.accuracy}% · ${m.dataset_size} ตัวอย่าง · เทรนเมื่อ ${fmtDate(m.finished_at, locale)}`,
                     )}
                   </span>
                 </span>
               </label>
             ))}
-
-            {selectable.length === 0 && (
-              <p className="mt-[10px] text-[12.5px] text-slate-400">
-                You have not trained a selectable model yet.{' '}
-                {unselectable.length > 0 && (
-                  <>
-                    {unselectable.length} completed run(s) cannot be selected, because they were
-                    simulated and produced no model file.{' '}
-                  </>
-                )}
-                Build one on the <b>Model Training</b> page.
-              </p>
-            )}
           </div>
         )}
-      </div>
+        {models !== null && selectable.length === 0 && (
+          <p className="hint mt-2">
+            {t('Models you train under Model development will appear here.', 'โมเดลที่คุณเทรนในหน้าพัฒนาโมเดลจะแสดงที่นี่')}
+          </p>
+        )}
+      </section>
 
-      <div className="card">
-        <h2>
-          Decision Thresholds{' '}
-          <span className="text-[11px] font-medium text-slate-400">this account only</span>
-        </h2>
-        <p className="hint">
-          The numbers the rule engine compares confidence scores and gap-times against. Changes
-          apply to your account alone and take effect the next time a case is analysed. Cases
-          already signed off keep the values they were scored with until you re-run them.
+      <section className="card">
+        <h2 className="card-title">{t('Saved axis presets', 'ค่าแกนที่บันทึกไว้')}</h2>
+        <p className="card-sub mb-3">
+          {t(
+            'Axes are fitted and saved in a case’s "Plot axes" step. New images of the same size use the newest preset automatically.',
+            'ปรับและบันทึกแกนได้ในขั้น "ปรับแกนกราฟ" ของเคส ภาพใหม่ที่ขนาดเท่ากันจะใช้ค่าล่าสุดโดยอัตโนมัติ',
+          )}
         </p>
-        <ThresholdsPanel />
-      </div>
+        <div id="presets">
+          <PresetManager />
+        </div>
+      </section>
 
-      <div className="card">
-        <h2>Fixed Constants</h2>
-        <p className="hint">
-          Calibration and upload settings, ported from PRPD_4_Gap Time.md, PART3 CMD FINAL CODE.
-          These are the same for every account.
-        </p>
-        <KV
-          rows={[
-            [
-              'Default image size',
-              `${c.default_image_width}×${c.default_image_height} (PDProcessingII)`,
-            ],
-            [
-              'Default frame (L / R / T / B)',
-              `${c.default_frame.x_left_0deg} / ${c.default_frame.x_right_360deg} / ${c.default_frame.y_top_plot} / ${c.default_frame.y_bottom_plot}`,
-            ],
-            ['Allowed uploads', c.allowed_extensions.join(', ')],
-          ]}
-        />
-      </div>
+      <div>
+        <Collapse id="thresholds" title={t('Decision thresholds (advanced)', 'เกณฑ์การตัดสิน (ขั้นสูง)')} meta={t('this account', 'บัญชีนี้')}>
+          <ThresholdsPanel />
+        </Collapse>
 
-      <div className="card">
-        <h2>Decision Rules</h2>
-        <table className="data">
-          <thead>
-            <tr>
-              <th>Key</th>
-              <th>Label</th>
-              <th>Rule</th>
-            </tr>
-          </thead>
-          <tbody>
-            {options.decision_modes.map((m) => (
-              <tr key={m.key}>
-                <td>
-                  <code>{m.key}</code>
-                </td>
-                <td>{m.label}</td>
-                <td className="text-[12px] text-slate-500">{m.description}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <Collapse title={t('Model engine status', 'สถานะเอนจินโมเดล')}>
+          <KV
+            rows={[
+              [t('ML enabled', 'เปิดใช้ ML'), yesNo(ml.enable_ml)],
+              ['TensorFlow', yesNo(ml.tensorflow_available)],
+              [t('PRPD-only model', 'โมเดล PRPD-only'), yesNo(ml.prpd_only_available)],
+              [t('Hybrid model', 'โมเดล Hybrid'), yesNo(ml.hybrid_available)],
+              [t('Gap-time model', 'โมเดล Gap-Time'), yesNo(ml.auto_gap_available)],
+              [t('Gap-time model version', 'เวอร์ชันโมเดล Gap-Time'), ml.auto_gap_model_version],
+              [t('Models folder', 'โฟลเดอร์โมเดล'), <code key="d">{ml.models_dir}</code>],
+              ...(ml.load_error
+                ? ([[t('Load error', 'ข้อผิดพลาด'), <span className="text-danger" key="e">{ml.load_error}</span>]] as [ReactNode, ReactNode][])
+                : []),
+            ]}
+          />
+          <p className="field-help">
+            {t(
+              'Without TensorFlow or the .keras files the system uses a mock engine and marks each case as mock.',
+              'หากไม่มี TensorFlow หรือไฟล์ .keras ระบบจะใช้โหมดจำลองและติดป้ายเคสว่าเป็นผลจำลอง',
+            )}
+          </p>
+        </Collapse>
+
+        <Collapse title={t('Fixed constants & decision rules', 'ค่าคงที่และกฎการตัดสิน')}>
+          <KV
+            rows={[
+              [t('Default image size', 'ขนาดภาพเริ่มต้น'), `${c.default_image_width}×${c.default_image_height}`],
+              [
+                t('Default frame (L / R / T / B)', 'กรอบเริ่มต้น (ซ้าย/ขวา/บน/ล่าง)'),
+                `${c.default_frame.x_left_0deg} / ${c.default_frame.x_right_360deg} / ${c.default_frame.y_top_plot} / ${c.default_frame.y_bottom_plot}`,
+              ],
+              [t('Allowed uploads', 'ไฟล์ที่รองรับ'), c.allowed_extensions.join(', ')],
+            ]}
+          />
+          <div className="table-wrap mt-3 rounded-lg border border-line">
+            <table className="data compact">
+              <thead>
+                <tr>
+                  <th>{t('Rule', 'กฎ')}</th>
+                  <th>{t('How it decides', 'วิธีตัดสิน')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {options.decision_modes.map((m) => (
+                  <tr key={m.key}>
+                    <td className="whitespace-nowrap">
+                      <b>{m.label}</b>
+                    </td>
+                    <td className="text-muted">{m.description}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Collapse>
       </div>
-    </>
+    </div>
   );
 }

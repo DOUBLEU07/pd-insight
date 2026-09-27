@@ -2,14 +2,16 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { ModelEvaluation } from '@/components/training/ModelEvaluation';
 import { NewModelWizard } from '@/components/training/NewModelWizard';
-import { CheckIcon, FileNewIcon } from '@/components/ui/icons';
-import { EmptyRow, Readout, Spinner, fmtDate } from '@/components/ui/primitives';
+import { CheckIcon, FileNewIcon, TrainingIcon, TrashIcon } from '@/components/ui/icons';
+import { Collapse, EmptyRow, Readout, Spinner, fmtDate } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/app-context';
+import { useI18n } from '@/lib/i18n';
+import { serverText, stageText } from '@/lib/server-text';
 import type { EditHistoryEntry, TrainedModel, TrainingStats, UsageEntry } from '@/lib/types';
 
-/** Status colour for the model history table. */
 function statusPill(status: TrainedModel['status']): string {
   if (status === 'completed') return 'pill-green';
   if (status === 'failed') return 'pill-red';
@@ -19,333 +21,363 @@ function statusPill(status: TrainedModel['status']): string {
 
 export default function TrainingPage() {
   const { toast } = useApp();
+  const { t, locale } = useI18n();
 
   const [stats, setStats] = useState<TrainingStats | null>(null);
-  const [usage, setUsage] = useState<UsageEntry[]>([]);
-  const [edits, setEdits] = useState<EditHistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [wizardOpen, setWizardOpen] = useState(false);
-  const [busyId, setBusyId] = useState<number | null>(null);
-
+  const [busy, setBusy] = useState(false);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const refreshStats = useCallback(async () => {
+  const refresh = useCallback(async () => {
     try {
       setStats(await api.trainingStats());
     } catch {
-      /* keep whatever is on screen rather than blanking the page */
+      /* keep whatever is on screen */
+    } finally {
+      setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    Promise.all([api.trainingStats(), api.usageLog(50), api.editHistory()])
-      .then(([s, u, e]) => {
-        setStats(s);
-        setUsage(u);
-        setEdits(e);
-      })
-      .finally(() => setLoading(false));
-  }, []);
+    void refresh();
+  }, [refresh]);
 
-  // A run started here, or in another tab, keeps updating the history table
-  // while it is in flight.
+  const history = stats?.history ?? [];
+
+  // Keep a selection; default to the newest run.
   useEffect(() => {
-    const inFlight = (stats?.history ?? []).some(
-      (m) => m.status === 'queued' || m.status === 'running',
-    );
-    if (!inFlight) return;
-    pollTimer.current = setTimeout(() => void refreshStats(), 2000);
+    if (history.length === 0) return;
+    if (selectedId == null || !history.some((m) => m.id === selectedId)) setSelectedId(history[0].id);
+  }, [history, selectedId]);
+
+  // A run in flight keeps the page updating.
+  useEffect(() => {
+    if (!history.some((m) => m.status === 'queued' || m.status === 'running')) return;
+    pollTimer.current = setTimeout(() => void refresh(), 2000);
     return () => {
       if (pollTimer.current) clearTimeout(pollTimer.current);
     };
-  }, [stats, refreshStats]);
+  }, [history, refresh]);
 
   async function activate(model: TrainedModel) {
-    setBusyId(model.id);
+    setBusy(true);
     try {
       await api.activateModel(model.id);
-      await refreshStats();
-      toast(`New cases will be analysed with ${model.name}`);
+      await refresh();
+      toast(t(`New cases will be analysed with ${model.name}`, `เคสใหม่จะวิเคราะห์ด้วย ${model.name}`));
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Could not select that model');
+      toast(e instanceof Error ? e.message : t('Could not select that model', 'เลือกโมเดลนี้ไม่สำเร็จ'));
     } finally {
-      setBusyId(null);
+      setBusy(false);
     }
   }
 
   async function remove(model: TrainedModel) {
-    setBusyId(model.id);
+    if (!window.confirm(t(`Delete model "${model.name}" and its dataset?`, `ลบโมเดล "${model.name}" และชุดข้อมูล?`))) return;
+    setBusy(true);
     try {
       await api.deleteModel(model.id);
-      await refreshStats();
-      toast(`Deleted ${model.name}`);
+      setSelectedId(null);
+      await refresh();
+      toast(t(`Deleted ${model.name}`, `ลบ ${model.name} แล้ว`));
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Could not delete that model');
+      toast(e instanceof Error ? e.message : t('Could not delete that model', 'ลบโมเดลไม่สำเร็จ'));
     } finally {
-      setBusyId(null);
+      setBusy(false);
     }
   }
 
-  if (loading) return <Spinner label="Loading training data…" />;
+  if (loading) return <Spinner />;
 
-  const history = stats?.history ?? [];
+  const selected = history.find((m) => m.id === selectedId) ?? null;
 
   return (
-    <>
-      <div className="card">
-        <h2 className="justify-between">
-          <span>Model Training</span>
-          <button className="btn btn-blue" type="button" onClick={() => setWizardOpen(true)}>
-            <FileNewIcon className="btn-icon" />
-            New model
-          </button>
-        </h2>
-        <p className="hint">
-          Train a classifier on your own labelled images. Everything below belongs to your account
-          alone: your dataset, your runs, and the model your cases are analysed with.
-        </p>
-        <div className="readout-grid">
-          <Readout label="Reviewed cases" value={stats?.reviewed_cases ?? 0} />
-          <Readout label="Training runs" value={stats?.training_runs ?? 0} />
-          <Readout label="Usage events (this account)" value={stats?.usage_events ?? 0} />
-          <Readout label="Logged in as" value={stats?.username ?? '-'} valueClass="text-[14px]" />
-        </div>
-
-        {stats && !stats.tensorflow_available && (
-          <div className="callout callout-amber mt-[14px]">
-            <b className="mb-[6px] block">TensorFlow is not available in this build</b>
-            A run started here still completes, but as a <b>simulation</b>: no network is fitted,
-            the figures are derived from the dataset composition rather than measured, and no model
-            file is produced, so the result cannot be selected as your analysis model. Run the
-            backend with TensorFlow installed (the Docker image ships it) to train for real.
+    <div className="stack">
+      <section className="card">
+        <div className="card-head !mb-0">
+          <div>
+            <h2 className="card-title">
+              <TrainingIcon />
+              {t('Your models', 'โมเดลของคุณ')}
+            </h2>
+            <p className="card-sub">
+              {t(
+                'Train a classifier on your own labelled PRPD images (MobileNetV2 transfer learning). Models and datasets stay on your account.',
+                'เทรนโมเดลจำแนกด้วยภาพ PRPD ที่ติดป้ายเอง (MobileNetV2 transfer learning) โมเดลและข้อมูลอยู่ในบัญชีของคุณเท่านั้น',
+              )}
+            </p>
           </div>
-        )}
-      </div>
-
-      <div className="card">
-        <h2>Model History</h2>
-        <p className="hint">
-          Every run on this account. The one marked <b>In use</b> is what new analyses are scored
-          with; with none selected, the published Colab models are used.
-        </p>
-        <table className="data">
-          <thead>
-            <tr>
-              <th>Model</th>
-              <th>Type</th>
-              <th>Trained</th>
-              <th>Dataset</th>
-              <th>Accuracy</th>
-              <th>Status</th>
-              <th className="w-[170px]" />
-            </tr>
-          </thead>
-          <tbody>
-            {history.map((m) => (
-              <tr key={m.id}>
-                <td>
-                  <b className="text-slate-900">{m.name}</b>
-                  {m.is_active && <span className="pill pill-green ml-2">In use</span>}
-                  {m.engine_used === 'simulated' && (
-                    <span className="pill pill-amber ml-2">Simulated</span>
-                  )}
-                </td>
-                <td className="text-[12px] text-slate-500">
-                  {m.kind_label}
-                  {!m.uses_published_classes && (
-                    <span className="block text-[11px] text-slate-400">
-                      {m.class_names.join(' / ')}
-                    </span>
-                  )}
-                </td>
-                <td className="text-[11.5px] text-slate-400">
-                  {fmtDate(m.finished_at ?? m.created_at)}
-                </td>
-                <td className="text-[12px] text-slate-500">
-                  {m.dataset_size} ({m.train_count}/{m.test_count}/{m.valid_count})
-                </td>
-                <td>
-                  {m.accuracy != null ? (
-                    <b className={m.engine_used === 'simulated' ? 'text-amber-700' : ''}>
-                      {m.accuracy}%
-                    </b>
-                  ) : (
-                    '-'
-                  )}
-                </td>
-                <td>
-                  <span className={`pill ${statusPill(m.status)}`}>
-                    {m.status === 'running' || m.status === 'queued'
-                      ? `${m.stage ?? 'Running'} ${m.progress}%`
-                      : m.status}
-                  </span>
-                </td>
-                <td>
-                  <div className="flex justify-end gap-[6px]">
-                    {m.can_activate && !m.is_active && (
-                      <button
-                        className="btn btn-outline px-[11px] py-[6px] text-[12px]"
-                        type="button"
-                        disabled={busyId === m.id}
-                        onClick={() => void activate(m)}
-                      >
-                        <CheckIcon className="btn-icon" />
-                        Use
-                      </button>
-                    )}
-                    {m.status !== 'running' && m.status !== 'queued' && (
-                      <button
-                        className="btn btn-outline px-[11px] py-[6px] text-[12px] text-red-700"
-                        type="button"
-                        disabled={busyId === m.id}
-                        onClick={() => void remove(m)}
-                      >
-                        Delete
-                      </button>
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {history.length === 0 && (
-              <EmptyRow colSpan={7}>
-                No models yet. Press <b>New model</b> to build one from your own images.
-              </EmptyRow>
+          <button className="btn btn-primary" type="button" onClick={() => setWizardOpen(true)}>
+            <FileNewIcon />
+            {t('New model', 'สร้างโมเดลใหม่')}
+          </button>
+        </div>
+        {stats && !stats.tensorflow_available && (
+          <p className="callout callout-amber mt-3 text-[14px]">
+            <b>{t('TensorFlow is not installed on this server.', 'เซิร์ฟเวอร์นี้ไม่มี TensorFlow')}</b>{' '}
+            {t(
+              'Runs complete as a simulation only: the figures are estimates and no model file is produced. Use the Docker image to train for real.',
+              'การเทรนจะเป็นแบบจำลองเท่านั้น ตัวเลขเป็นค่าประมาณและไม่มีไฟล์โมเดล ใช้ Docker image เพื่อเทรนจริง',
             )}
-          </tbody>
-        </table>
-      </div>
+          </p>
+        )}
+      </section>
 
-      <div className="card">
-        <h2>Training Dataset</h2>
-        <p className="hint">
-          Data accumulated from reviewed and saved cases, kept as the dataset a training run would
-          draw on.
-        </p>
-        <div className="readout-grid">
-          <Readout label="Reviewed cases" value={stats?.reviewed_cases ?? 0} />
-          <Readout
-            label="Recommended split"
-            value={
-              stats
-                ? `${stats.recommended_split.train}/${stats.recommended_split.test}/${stats.recommended_split.valid}`
-                : '-'
-            }
-            valueClass="text-[14px]"
-          />
-          <Readout
-            label="Default classes"
-            value={(stats?.canonical_classes ?? []).join(', ') || '-'}
-            valueClass="text-[13px]"
-          />
+      {history.length === 0 ? (
+        <section className="card empty">
+          <p>{t('No models yet.', 'ยังไม่มีโมเดล')}</p>
+          <button className="btn btn-primary mt-3" type="button" onClick={() => setWizardOpen(true)}>
+            <FileNewIcon />
+            {t('Create your first model', 'สร้างโมเดลแรก')}
+          </button>
+        </section>
+      ) : (
+        <div className="grid items-start gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
+          <nav className="model-list" aria-label={t('Models', 'โมเดล')}>
+            {history.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                className={`model-row ${m.id === selectedId ? 'on' : ''}`}
+                onClick={() => setSelectedId(m.id)}
+              >
+                <b title={m.name}>{m.name}</b>
+                <span className="acc">{m.accuracy != null ? `${m.accuracy}%` : '-'}</span>
+                <small>
+                  <span className={`pill ${statusPill(m.status)} mr-1 !text-[12px] !leading-[18px]`}>
+                    {m.status === 'running' || m.status === 'queued' ? `${m.progress}%` : statusLabel(m.status, t)}
+                  </span>
+                  {m.is_active && <span className="pill pill-blue mr-1 !text-[12px] !leading-[18px]">{t('In use', 'ใช้งานอยู่')}</span>}
+                  {m.kind_label} · {fmtDate(m.finished_at ?? m.created_at, locale)}
+                </small>
+              </button>
+            ))}
+          </nav>
+
+          {selected && (
+            <section className="card min-w-0">
+              <div className="card-head">
+                <div className="min-w-0">
+                  <h2 className="card-title text-[19px]">
+                    {selected.name}
+                    {selected.is_active && <span className="pill pill-blue">{t('In use', 'ใช้งานอยู่')}</span>}
+                    {selected.engine_used === 'simulated' && <span className="pill pill-amber">{t('Simulated', 'จำลอง')}</span>}
+                  </h2>
+                  <p className="card-sub">
+                    {selected.kind_label} · {selected.class_names.join(' / ')} ·{' '}
+                    {selected.backbone === 'scratch' ? t('compact CNN (retired)', 'CNN ขนาดเล็ก (เลิกใช้แล้ว)') : 'MobileNetV2'}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  {selected.can_activate && !selected.is_active && (
+                    <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => void activate(selected)}>
+                      <CheckIcon />
+                      {t('Use for new cases', 'ใช้กับเคสใหม่')}
+                    </button>
+                  )}
+                  {selected.status !== 'running' && selected.status !== 'queued' && (
+                    <button className="btn btn-danger btn-sm" type="button" disabled={busy} onClick={() => void remove(selected)}>
+                      <TrashIcon />
+                      {t('Delete', 'ลบ')}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {(selected.status === 'running' || selected.status === 'queued') && (
+                <div className="mb-4">
+                  <div className="mb-1 flex justify-between text-[14px] font-semibold">
+                    <span>{stageText(selected.stage, t) || t('Starting…', 'กำลังเริ่ม…')}</span>
+                    <span className="font-mono">{selected.progress}%</span>
+                  </div>
+                  <div className="progress">
+                    <i style={{ width: `${Math.max(4, selected.progress)}%` }} />
+                  </div>
+                </div>
+              )}
+
+              {selected.status === 'failed' && (
+                <p className="callout callout-red mb-4">
+                  <b>{t('The run failed.', 'การเทรนล้มเหลว')}</b> {serverText(selected.error, t)}
+                </p>
+              )}
+
+              <div className="readout-grid mb-4">
+                <Readout label={t('Test accuracy', 'ความแม่นยำ (ทดสอบ)')} value={selected.accuracy != null ? `${selected.accuracy}%` : '-'} />
+                <Readout label={t('Validation accuracy', 'ความแม่นยำ (ตรวจสอบ)')} value={selected.val_accuracy != null ? `${selected.val_accuracy}%` : '-'} />
+                <Readout label="Loss" value={selected.loss ?? '-'} />
+                <Readout label={t('Epochs run', 'จำนวน epoch')} value={`${selected.epochs}/${selected.max_epochs}`} />
+                <Readout
+                  label={t('Train / test / valid', 'ฝึก / ทดสอบ / ตรวจสอบ')}
+                  value={`${selected.train_count}/${selected.test_count}/${selected.valid_count}`}
+                />
+              </div>
+
+              {selected.note && selected.status === 'completed' && <p className="hint mb-4 text-[13.5px]">{serverText(selected.note, t)}</p>}
+
+              {selected.status === 'completed' && <ModelEvaluation model={selected} />}
+            </section>
+          )}
         </div>
-      </div>
+      )}
 
-      <div className="card">
-        <h2>Pre-Training Checklist</h2>
-        <p className="hint">
-          Conditions a dataset must satisfy before a training run is meaningful. Work through these
-          before preparing data. The last one is the difference between a real accuracy figure and
-          an inflated one.
-        </p>
-        <ul className="help-checklist text-[12.5px] leading-[1.6] text-slate-600">
-          <li>Data is arranged in the directory structure the system defines.</li>
-          <li>Data is separated correctly by class: Corona, Surface, Internal.</li>
-          <li>Every image label has been verified before training starts.</li>
-          <li>
-            The split is fixed at <b>64% training / 20% testing / 16% validation</b>.
-          </li>
-          <li>
-            Each class holds enough samples, and class counts are not far out of balance with one
-            another.
-          </li>
-          <li>
-            <b>
-              No image, and no image derived from the same measurement, appears in both the
-              training and the testing set.
-            </b>{' '}
-            This is data leakage, and it inflates the evaluation scores.
-          </li>
-          <li>
-            For the Hybrid model, each PRPD is paired with the TF Map{' '}
-            <b>from the same measurement</b>. Unrelated PRPD/TF Map pairs must not be used.
-          </li>
-        </ul>
-      </div>
-
-      <div className="card">
-        <h2>
-          Edit History <span className="text-[11px] font-medium text-slate-400">all reviewers</span>
-        </h2>
-        <p className="hint">
-          Every field-level change made during review, exportable as edit_history.csv from the
-          Export Center.
-        </p>
-        <div className="max-h-[320px] overflow-y-auto">
-          <table className="data">
-            <thead>
-              <tr>
-                <th>Timestamp</th>
-                <th>Case</th>
-                <th>Field</th>
-                <th>Old</th>
-                <th>New</th>
-                <th>By</th>
-              </tr>
-            </thead>
-            <tbody>
-              {edits.map((e, i) => (
-                <tr key={i}>
-                  <td className="text-[11.5px] text-slate-400">{fmtDate(e.timestamp)}</td>
-                  <td>{e.case_base_name}</td>
-                  <td>{e.changed_field}</td>
-                  <td className="text-[11.5px] text-slate-500">{e.old_value || '-'}</td>
-                  <td className="text-[11.5px]">{e.new_value || '-'}</td>
-                  <td className="text-[11.5px] text-slate-500">{e.changed_by}</td>
-                </tr>
-              ))}
-              {edits.length === 0 && <EmptyRow colSpan={6}>No edits recorded yet</EmptyRow>}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div className="card">
-        <h2>
-          Usage Log <span className="text-[11px] font-medium text-slate-400">this account</span>
-        </h2>
-        <div className="max-h-[320px] overflow-y-auto">
-          <table className="data">
-            <thead>
-              <tr>
-                <th>Timestamp</th>
-                <th>Action</th>
-                <th>Details</th>
-              </tr>
-            </thead>
-            <tbody>
-              {usage.map((u, i) => (
-                <tr key={i}>
-                  <td className="text-[11.5px] text-slate-400">{fmtDate(u.timestamp)}</td>
-                  <td>{u.action}</td>
-                  <td className="text-[11.5px] text-slate-500">{u.detail || ''}</td>
-                </tr>
-              ))}
-              {usage.length === 0 && <EmptyRow colSpan={3}>No usage data yet</EmptyRow>}
-            </tbody>
-          </table>
-        </div>
+      <div>
+        <Collapse title={t('Before you train: dataset checklist', 'ก่อนเทรน: รายการตรวจชุดข้อมูล')}>
+          <ul className="bullets">
+            <li>{t('Images are separated correctly by class, and every label has been checked.', 'แยกภาพตามคลาสถูกต้อง และตรวจป้ายกำกับทุกภาพแล้ว')}</li>
+            <li>
+              {t(
+                `The split is close to ${stats?.recommended_split.train ?? 64}% train / ${stats?.recommended_split.test ?? 20}% test / ${stats?.recommended_split.valid ?? 16}% validation.`,
+                `สัดส่วนใกล้ ${stats?.recommended_split.train ?? 64}% ฝึก / ${stats?.recommended_split.test ?? 20}% ทดสอบ / ${stats?.recommended_split.valid ?? 16}% ตรวจสอบ`,
+              )}
+            </li>
+            <li>{t('Each class has enough images, and the counts are roughly balanced.', 'แต่ละคลาสมีภาพเพียงพอ และจำนวนใกล้เคียงกัน')}</li>
+            <li>
+              <b>
+                {t(
+                  'No image, or image from the same measurement, is in both the training and the test set.',
+                  'ไม่มีภาพเดียวกันหรือภาพจากการวัดเดียวกันอยู่ทั้งในชุดฝึกและชุดทดสอบ',
+                )}
+              </b>{' '}
+              {t('That leakage inflates the accuracy.', 'การรั่วไหลแบบนี้ทำให้ความแม่นยำสูงเกินจริง')}
+            </li>
+            <li>
+              {t(
+                'For Hybrid models, each PRPD is paired with the TF map from the same measurement (<case>_PRPD / <case>_TF).',
+                'สำหรับโมเดล Hybrid ภาพ PRPD ต้องคู่กับ TF Map จากการวัดเดียวกัน (<case>_PRPD / <case>_TF)',
+              )}
+            </li>
+          </ul>
+        </Collapse>
+        <ActivityLog />
       </div>
 
       {wizardOpen && (
         <NewModelWizard
           onClose={() => {
             setWizardOpen(false);
-            void refreshStats();
+            void refresh();
           }}
-          onFinished={() => void refreshStats()}
+          onFinished={() => void refresh()}
         />
       )}
-    </>
+    </div>
+  );
+}
+
+function statusLabel(status: TrainedModel['status'], t: <V = string>(en: V, th: V) => V): string {
+  switch (status) {
+    case 'completed':
+      return t('Completed', 'เสร็จแล้ว');
+    case 'failed':
+      return t('Failed', 'ล้มเหลว');
+    case 'draft':
+      return t('Draft', 'ร่าง');
+    case 'queued':
+      return t('Queued', 'รอคิว');
+    default:
+      return t('Training', 'กำลังเทรน');
+  }
+}
+
+/** Edit history and usage log, loaded only when opened. */
+function ActivityLog() {
+  const { t, locale } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<'edits' | 'usage'>('edits');
+  const [edits, setEdits] = useState<EditHistoryEntry[] | null>(null);
+  const [usage, setUsage] = useState<UsageEntry[] | null>(null);
+
+  useEffect(() => {
+    if (!open || edits) return;
+    Promise.all([api.editHistory(), api.usageLog(100)])
+      .then(([e, u]) => {
+        setEdits(e);
+        setUsage(u);
+      })
+      .catch(() => {
+        setEdits([]);
+        setUsage([]);
+      });
+  }, [open, edits]);
+
+  return (
+    <details className="fold" onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary>
+        <svg className="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+          <polyline points="9 18 15 12 9 6" />
+        </svg>
+        {t('Activity: edit history and usage log', 'กิจกรรม: ประวัติการแก้ไขและการใช้งาน')}
+      </summary>
+      <div className="fold-body">
+        <div className="tabs">
+          <button type="button" className={tab === 'edits' ? 'on' : ''} onClick={() => setTab('edits')}>
+            {t('Edit history', 'ประวัติการแก้ไข')}
+          </button>
+          <button type="button" className={tab === 'usage' ? 'on' : ''} onClick={() => setTab('usage')}>
+            {t('Usage log', 'บันทึกการใช้งาน')}
+          </button>
+        </div>
+        {edits === null ? (
+          <Spinner />
+        ) : tab === 'edits' ? (
+          <div className="scroll-box">
+            <table className="data compact">
+              <thead>
+                <tr>
+                  <th>{t('Time', 'เวลา')}</th>
+                  <th>{t('Case', 'เคส')}</th>
+                  <th>{t('Field', 'ฟิลด์')}</th>
+                  <th>{t('Old → new', 'เดิม → ใหม่')}</th>
+                  <th>{t('By', 'โดย')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {edits.map((e, i) => (
+                  <tr key={i}>
+                    <td className="whitespace-nowrap text-muted">{fmtDate(e.timestamp, locale)}</td>
+                    <td>{e.case_base_name}</td>
+                    <td>
+                      <code>{e.changed_field}</code>
+                    </td>
+                    <td>
+                      <span className="text-muted">{e.old_value || '-'}</span> → {e.new_value || '-'}
+                    </td>
+                    <td className="text-muted">{e.changed_by}</td>
+                  </tr>
+                ))}
+                {edits.length === 0 && <EmptyRow colSpan={5}>{t('No edits recorded yet.', 'ยังไม่มีการแก้ไข')}</EmptyRow>}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="scroll-box">
+            <table className="data compact">
+              <thead>
+                <tr>
+                  <th>{t('Time', 'เวลา')}</th>
+                  <th>{t('Action', 'การกระทำ')}</th>
+                  <th>{t('Details', 'รายละเอียด')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(usage ?? []).map((u, i) => (
+                  <tr key={i}>
+                    <td className="whitespace-nowrap text-muted">{fmtDate(u.timestamp, locale)}</td>
+                    <td>
+                      <code>{u.action}</code>
+                    </td>
+                    <td className="text-muted">{u.detail || ''}</td>
+                  </tr>
+                ))}
+                {(usage ?? []).length === 0 && <EmptyRow colSpan={3}>{t('No activity yet.', 'ยังไม่มีกิจกรรม')}</EmptyRow>}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </details>
   );
 }

@@ -3,15 +3,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 
-import {
-  groupCasesBySeverity,
-  SeverityGroupCards,
-  type SeverityKey,
-} from '@/components/case/SeverityGroups';
-import { Spinner, fmtDate } from '@/components/ui/primitives';
+import { groupCasesBySeverity, SeverityGroupCards, type SeverityKey } from '@/components/case/SeverityGroups';
+import { ArrowLeftIcon, PlayIcon } from '@/components/ui/icons';
+import { Meter, Spinner, fmtDate } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/app-context';
-import { withinDateFilter, type DateFilter } from '@/lib/filters';
+import { useI18n } from '@/lib/i18n';
 import type { BatchSummary } from '@/lib/types';
 
 type SeverityFilter = 'all' | SeverityKey;
@@ -21,20 +18,21 @@ export default function BatchPreviewPage() {
   const params = useParams<{ id: string }>();
   const batchId = Number(params.id);
   const { toast } = useApp();
+  const { t, locale } = useI18n();
 
   const [batch, setBatch] = useState<BatchSummary | null>(null);
   const [loading, setLoading] = useState(true);
-  const [dateFilter, setDateFilter] = useState<DateFilter>('all');
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>('all');
 
   const load = useCallback(async () => {
     try {
       setBatch(await api.getBatch(batchId));
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Failed to load batch');
+      toast(e instanceof Error ? e.message : t('Could not load this folder', 'โหลดโฟลเดอร์นี้ไม่สำเร็จ'));
     } finally {
       setLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchId, toast]);
 
   useEffect(() => {
@@ -42,106 +40,90 @@ export default function BatchPreviewPage() {
   }, [batchId, load]);
 
   async function removeCase(id: number, name: string) {
-    if (!window.confirm(`Delete case "${name}"? This cannot be undone.`)) return;
-    await api.deleteCase(id);
-    toast(`Deleted ${name}`);
-    void load();
+    if (!window.confirm(t(`Delete case "${name}"? This cannot be undone.`, `ลบเคส "${name}"? ไม่สามารถย้อนกลับได้`))) return;
+    try {
+      await api.deleteCase(id);
+      toast(t(`Deleted ${name}`, `ลบ ${name} แล้ว`));
+      void load();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : t('Delete failed', 'ลบไม่สำเร็จ'));
+    }
   }
 
-  const groups = useMemo(() => {
-    const cases = (batch?.cases ?? []).filter((c) => withinDateFilter(c.created_time, dateFilter));
-    return groupCasesBySeverity(cases).filter(
-      (g) => severityFilter === 'all' || g.key === severityFilter,
-    );
-  }, [batch, dateFilter, severityFilter]);
+  const groups = useMemo(
+    () =>
+      groupCasesBySeverity(batch?.cases ?? []).filter((g) => severityFilter === 'all' || g.key === severityFilter),
+    [batch, severityFilter],
+  );
 
-  if (loading) return <Spinner label="Loading batch…" />;
-  if (!batch) return <p className="hint">Batch not found.</p>;
+  if (loading) return <Spinner />;
+  if (!batch) return <p className="empty">{t('Folder not found.', 'ไม่พบโฟลเดอร์นี้')}</p>;
 
-  const reviewed = batch.cases?.filter((c) => c.status === 'done').length ?? 0;
-  const filtersActive = dateFilter !== 'all' || severityFilter !== 'all';
+  const cases = batch.cases ?? [];
+  const reviewed = cases.filter((c) => c.status === 'done').length;
+  const pct = cases.length ? Math.round((reviewed / cases.length) * 100) : 0;
+  const firstOpen = cases.find((c) => c.status !== 'done');
+  const openCase = (id: number) => router.push(`/cases/${id}?from=batch&batch=${batch.id}`);
 
   return (
-    <>
-      <div className="card">
-        <div className="flex flex-wrap items-center justify-between gap-[10px]">
-          <div>
-            <h2 className="m-0 border-none p-0">{batch.name}</h2>
-            <p className="hint mb-0 mt-[6px]">
-              Uploaded {fmtDate(batch.upload_date)} · {batch.total} image
-              {batch.total === 1 ? '' : 's'} · {reviewed}/{batch.total} reviewed
+    <div className="stack">
+      <section className="card">
+        <div className="card-head !mb-0">
+          <div className="min-w-0">
+            <button type="button" className="btn btn-ghost btn-sm -ml-2 mb-1" onClick={() => router.push('/cases?mode=folder')}>
+              <ArrowLeftIcon />
+              {t('Folders', 'โฟลเดอร์ทั้งหมด')}
+            </button>
+            <h2 className="card-title text-[20px]">{batch.name}</h2>
+            <p className="card-sub">
+              {t(
+                `Uploaded ${fmtDate(batch.upload_date, locale)} · ${batch.total} case(s) · ${reviewed} reviewed`,
+                `อัปโหลด ${fmtDate(batch.upload_date, locale)} · ${batch.total} เคส · ตรวจแล้ว ${reviewed}`,
+              )}
             </p>
+            <div className="max-w-[360px]">
+              <Meter value={pct} accent="#10b981" />
+            </div>
           </div>
-          <span className="small-link" onClick={() => router.push('/dashboard')}>
-            ← Back to Dashboard
-          </span>
-        </div>
-      </div>
-
-      {(batch.cases ?? []).length > 0 && (
-        <div className="topfilters">
-          <label className="flex items-center gap-[6px]">
-            Uploaded:
-            <select
-              value={dateFilter}
-              onChange={(e) => setDateFilter(e.target.value as DateFilter)}
-              className="w-auto min-w-[150px]"
-            >
-              <option value="all">All time</option>
-              <option value="today">Today</option>
-              <option value="3d">Last 3 days</option>
-              <option value="7d">Last 7 days</option>
-            </select>
-          </label>
-          <label className="flex items-center gap-[6px]">
-            Severity:
-            <select
-              value={severityFilter}
-              onChange={(e) => setSeverityFilter(e.target.value as SeverityFilter)}
-              className="w-auto min-w-[150px]"
-            >
-              <option value="all">All severities</option>
-              <option value="High">High</option>
-              <option value="Moderate">Moderate</option>
-              <option value="Initial">Initial</option>
-              <option value="Pending">Pending</option>
-            </select>
-          </label>
-          {filtersActive && (
-            <span
-              className="small-link"
-              onClick={() => {
-                setDateFilter('all');
-                setSeverityFilter('all');
-              }}
-            >
-              Clear filters
-            </span>
+          {firstOpen && (
+            <button type="button" className="btn btn-primary btn-lg" onClick={() => openCase(firstOpen.id)}>
+              <PlayIcon />
+              {reviewed === 0 ? t('Start reviewing', 'เริ่มตรวจ') : t('Continue reviewing', 'ตรวจต่อ')}
+            </button>
           )}
         </div>
-      )}
-
-      <div className="dash-section">
-        <div className="dash-section-head">
-          <h2>Images in this folder, by severity</h2>
-        </div>
-        <p className="hint -mt-2 mb-[14px]">
-          Severity comes from the confirmed PD source group combined with the measured gap-time.
-          Click Open case to open a single image in the case review workflow. &quot;← Back&quot;
-          returns here.
-        </p>
-
-        {(batch.cases ?? []).length === 0 ? (
-          <p className="hint">This batch no longer has any cases (they may have been deleted).</p>
-        ) : (
-          <SeverityGroupCards
-            groups={groups}
-            onOpenCase={(id) => router.push(`/cases/${id}?from=batch&batch=${batch.id}`)}
-            onDeleteCase={(id, name) => void removeCase(id, name)}
-            emptyLabel={filtersActive ? 'No cases match this filter.' : 'No cases in this group.'}
-          />
+        {reviewed === 0 && cases.length > 1 && (
+          <p className="callout callout-blue mt-4 text-[14px]">
+            {t(
+              'Tip: fit the plot axes on the first case, then use "Copy axes to the rest of this folder" so you only do it once.',
+              'แนะนำ: ปรับแกนกราฟที่เคสแรก แล้วกด "คัดลอกแกนไปยังเคสที่เหลือในโฟลเดอร์นี้" เพื่อทำเพียงครั้งเดียว',
+            )}
+          </p>
         )}
-      </div>
-    </>
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <h2 className="card-title">{t('Cases by severity', 'เคสตามความรุนแรง')}</h2>
+          <select
+            value={severityFilter}
+            onChange={(e) => setSeverityFilter(e.target.value as SeverityFilter)}
+            className="w-auto"
+            aria-label={t('Severity', 'ความรุนแรง')}
+          >
+            <option value="all">{t('All severities', 'ทุกระดับ')}</option>
+            <option value="High">High</option>
+            <option value="Moderate">Moderate</option>
+            <option value="Initial">Initial</option>
+            <option value="Pending">{t('No gap-time yet', 'ยังไม่วัด Gap-Time')}</option>
+          </select>
+        </div>
+        {cases.length === 0 ? (
+          <p className="empty">{t('This folder has no cases left.', 'โฟลเดอร์นี้ไม่มีเคสเหลืออยู่')}</p>
+        ) : (
+          <SeverityGroupCards groups={groups} onOpenCase={openCase} onDeleteCase={(id, name) => void removeCase(id, name)} />
+        )}
+      </section>
+    </div>
   );
 }

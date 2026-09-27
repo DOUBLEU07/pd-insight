@@ -145,6 +145,11 @@ export interface SeverityGroup {
 export interface DashboardData {
   kpi: {
     total: number;
+    reviewed: number;
+    reviewed_pct: number;
+    to_review: number;
+    high_severity: number;
+    batches: number;
     corona: number;
     corona_pct: number;
     surface: number;
@@ -251,7 +256,10 @@ export type ModelKind = 'prpd_only' | 'hybrid';
 export type ModelStatus = 'draft' | 'queued' | 'running' | 'completed' | 'failed';
 export type DatasetSplit = 'train' | 'test' | 'valid';
 
-/** Which backbone a run fits. */
+/**
+ * Which backbone a run fits. New runs are always MobileNetV2; 'scratch' (the
+ * removed compact CNN) only appears on older history rows.
+ */
 export type Backbone = 'scratch' | 'mobilenetv2';
 
 /**
@@ -304,6 +312,8 @@ export interface TrainedModel {
   can_activate: boolean;
   /** False when the class set differs from the published Corona/Surface/Internal. */
   uses_published_classes: boolean;
+  /** A real run recorded per-image test predictions. */
+  has_evaluation: boolean;
   dataset_detail?: Record<string, Record<DatasetSplit, number>>;
 }
 
@@ -365,4 +375,39 @@ export interface ThresholdSettings {
   overridden: ThresholdKey[];
   bounds: Record<ThresholdKey, { min: number; max: number; unit: string }>;
   updated_at: string | null;
+}
+
+/** One test image and what the trained model predicted for it. */
+export interface EvaluationSample {
+  prpd: string | null;
+  tf: string | null;
+  prpd_url: string | null;
+  tf_url: string | null;
+  true: string;
+  predicted: string;
+  correct: boolean;
+  scores: Record<string, number>;
+}
+
+export interface ModelEvaluation {
+  available: boolean;
+  reason?: string;
+  split?: string;
+  class_names?: string[];
+  /** Rows are the true class, columns the predicted class. */
+  confusion?: number[][];
+  per_class?: {
+    name: string;
+    support: number;
+    correct: number;
+    precision: number;
+    recall: number;
+    f1: number;
+  }[];
+  total?: number;
+  correct?: number;
+  wrong?: number;
+  accuracy?: number;
+  samples?: EvaluationSample[];
+  history?: Partial<Record<'loss' | 'val_loss' | 'acc' | 'val_acc', number[]>>;
 }

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -84,6 +85,10 @@ def _serialize(row: TrainedModel, *, detail: bool = False) -> dict[str, Any]:
         # Whether the published PD source cascade applies unchanged, which is
         # what the wizard warns about when a class set drops Internal.
         "uses_published_classes": class_names == list(settings.class_names),
+        "has_evaluation": (
+            row.status == "completed"
+            and (training.model_dir(row.owner_id, row.id) / training.EVALUATION_FILE).is_file()
+        ),
     }
 
     if detail:
@@ -199,7 +204,7 @@ class CreateModelRequest(BaseModel):
     max_epochs: int = training.MAX_EPOCHS
     batch_size: int = training.BATCH_SIZE
     learning_rate: float = training.LEARNING_RATE
-    backbone: str = "scratch"
+    backbone: str = training.DEFAULT_BACKBONE
 
     # "May the dataset you upload here be passed to the PD Insight developers
     # to improve the published models?" Declining changes nothing about the
@@ -359,6 +364,36 @@ def get_model(
     payload["blocking"] = training.readiness(summary, class_names)
     payload["warnings"] = training.balance_warnings(summary, class_names)
     return payload
+
+
+@router.get("/models/{model_id}/evaluation")
+def model_evaluation(
+    model_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+) -> dict[str, Any]:
+    """Learning curve, confusion matrix and per-image test predictions.
+
+    Each sample carries an image URL so the page can show exactly which test
+    images the model got wrong.
+    """
+    row = _owned(db, model_id, user)
+    data = training.read_evaluation(user.id, row.id)
+    if data is None:
+        return {
+            "available": False,
+            "reason": (
+                "Simulated run: no network was fitted, so there are no predictions to show."
+                if row.engine_used == "simulated"
+                else "No evaluation was recorded for this run."
+            ),
+        }
+
+    base = f"/api/v1/files/training/{user.id}/{row.id}/"
+    for sample in data.get("samples", []):
+        for key in ("prpd", "tf"):
+            rel = sample.get(key)
+            sample[f"{key}_url"] = base + quote(rel) if rel else None
+    data["available"] = True
+    return data
 
 
 @router.post("/models/{model_id}/data", status_code=status.HTTP_201_CREATED)

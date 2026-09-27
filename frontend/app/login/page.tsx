@@ -6,7 +6,6 @@ import { useRouter } from 'next/navigation';
 import {
   ActivityIcon,
   EyeIcon,
-  LanguagesIcon,
   LogInIcon,
   MoonIcon,
   SunIcon,
@@ -20,7 +19,7 @@ import { useTheme } from '@/lib/theme';
 export default function LoginPage() {
   const router = useRouter();
   const { user, ready, signIn, signUp } = useApp();
-  const { lang, toggleLang, t } = useI18n();
+  const { lang, setLang, t } = useI18n();
   const { isDark, toggleTheme } = useTheme();
 
   const [mode, setMode] = useState<'login' | 'signup'>('login');
@@ -88,78 +87,64 @@ export default function LoginPage() {
   }
 
   return (
-    <div className={`login-page ${isDark ? 'dark' : ''}`}>
+    <div className="login-page">
       <div className="login-brand">
-        <span>
-          <ActivityIcon width={24} height={24} />
+        <span className="brand-mark">
+          <ActivityIcon width={22} height={22} />
         </span>
-        <b>PhasePulse</b>
-        <small>{t('Partial Discharge Analysis Platform', 'แพลตฟอร์มวิเคราะห์ Partial Discharge')}</small>
+        <span className="brand-name text-[22px]">
+          PhasePulse
+          <small>{t('Partial Discharge Analysis Platform', 'แพลตฟอร์มวิเคราะห์ Partial Discharge')}</small>
+        </span>
       </div>
 
       <article className="login-card">
-        <div className="auth-tabs">
-          <button
-            className={mode === 'login' ? 'active' : ''}
-            onClick={() => switchMode('login')}
-            type="button"
-          >
+        <div className="seg mb-5 flex w-full">
+          <button className={`flex-1 justify-center ${mode === 'login' ? 'on' : ''}`} onClick={() => switchMode('login')} type="button">
+            <LogInIcon />
             {t('Sign in', 'เข้าสู่ระบบ')}
           </button>
-          <button
-            className={mode === 'signup' ? 'active' : ''}
-            onClick={() => switchMode('signup')}
-            type="button"
-          >
+          <button className={`flex-1 justify-center ${mode === 'signup' ? 'on' : ''}`} onClick={() => switchMode('signup')} type="button">
+            <UserPlusIcon />
             {t('Sign up', 'สมัครสมาชิก')}
           </button>
         </div>
 
-        {mode === 'login' ? (
-          <LogInIcon width={28} height={28} className="text-sky-500 mb-2" />
-        ) : (
-          <UserPlusIcon width={28} height={28} className="text-sky-500 mb-2" />
-        )}
-
-        <h1>
+        <h1>{mode === 'login' ? t('Welcome back', 'ยินดีต้อนรับกลับ') : t('Create your account', 'สร้างบัญชีใหม่')}</h1>
+        <p className="card-sub">
           {mode === 'login'
-            ? t('Welcome back', 'ยินดีต้อนรับกลับ')
-            : t('Create your account', 'สร้างบัญชีใหม่')}
-        </h1>
-        <p>
-          {mode === 'login'
-            ? t(
-                'Sign in to access your assessments and model projects.',
-                'เข้าสู่ระบบเพื่อเข้าถึงผลการประเมินและโครงการโมเดลของคุณ'
-              )
-            : t(
-                'Register an account for the PhasePulse research platform.',
-                'ลงทะเบียนบัญชีสำหรับแพลตฟอร์มวิจัย PhasePulse'
-              )}
+            ? t('Sign in to your assessments and model projects.', 'เข้าสู่ระบบเพื่อเข้าถึงผลการประเมินและโครงการโมเดลของคุณ')
+            : t('Register an account for the PhasePulse research platform.', 'ลงทะเบียนบัญชีสำหรับแพลตฟอร์มวิจัย PhasePulse')}
         </p>
 
         {error && (
-          <div className="locked-banner red mb-4 text-xs">
+          <p className="callout callout-red mt-4" role="alert">
             {error}
-          </div>
+          </p>
         )}
 
         {mode === 'signup' && (
-          <label>
-            {t('Full name', 'ชื่อ–นามสกุล')}
+          <div className="field">
+            <label className="label" htmlFor="full-name">
+              {t('Full name', 'ชื่อ–นามสกุล')}
+            </label>
             <input
+              id="full-name"
               type="text"
               placeholder={t('Your name', 'ชื่อของคุณ')}
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
               onKeyDown={onKeyEvent}
             />
-          </label>
+          </div>
         )}
 
-        <label>
-          {t('Email address / Username', 'อีเมล หรือ ชื่อผู้ใช้')}
+        <div className="field">
+          <label className="label" htmlFor="username">
+            {t('Email or username', 'อีเมล หรือ ชื่อผู้ใช้')}
+          </label>
           <input
+            id="username"
             type="text"
             placeholder="name@example.com"
             value={username}
@@ -167,61 +152,63 @@ export default function LoginPage() {
             onKeyDown={onKeyEvent}
             autoComplete="username"
           />
-        </label>
+        </div>
 
-        <label>
-          {t('Password', 'รหัสผ่าน')}
-          <span className="password-field">
+        <div className="field">
+          <label className="label" htmlFor="password">
+            {t('Password', 'รหัสผ่าน')}
+          </label>
+          <div className="password-wrap">
             <input
+              id="password"
               type={showPassword ? 'text' : 'password'}
-              placeholder={t('At least 8 characters', 'อย่างน้อย 8 ตัวอักษร')}
+              placeholder={t('At least 6 characters', 'อย่างน้อย 6 ตัวอักษร')}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               onKeyDown={onKeyEvent}
-              autoComplete="current-password"
+              autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
             />
             <button
               type="button"
-              aria-label={t('Show password', 'แสดงรหัสผ่าน')}
+              className="icon-only"
+              aria-label={showPassword ? t('Hide password', 'ซ่อนรหัสผ่าน') : t('Show password', 'แสดงรหัสผ่าน')}
               onClick={() => setShowPassword((v) => !v)}
             >
-              <EyeIcon width={18} height={18} />
+              <EyeIcon slashed={showPassword} />
             </button>
-          </span>
-        </label>
+          </div>
+        </div>
 
         {mode === 'signup' && (
-          <label>
-            {t('Role', 'บทบาทในระบบ')}
-            <select value={role} onChange={(e) => setRole(e.target.value)}>
+          <div className="field">
+            <label className="label" htmlFor="role">
+              {t('Role', 'บทบาท')}
+            </label>
+            <select id="role" value={role} onChange={(e) => setRole(e.target.value)}>
               {roles.map((r) => (
                 <option key={r} value={r}>
                   {r}
                 </option>
               ))}
             </select>
-          </label>
+          </div>
         )}
 
         {mode === 'login' ? (
-          <div className="login-row">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={rememberMe}
-                onChange={(e) => setRememberMe(e.target.checked)}
-              />
+          <div className="mt-3 flex items-center justify-between gap-3 text-[14px]">
+            <label className="flex cursor-pointer items-center gap-2 text-muted">
+              <input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} />
               {t('Remember me', 'จดจำฉัน')}
             </label>
             <button
               type="button"
-              className="link-btn"
+              className="link"
               onClick={() =>
                 alert(
                   t(
-                    'Default demo credentials:\nnatthawutrit.2545@gmail.com / phasepulse\nor admin / admin',
-                    'รหัสผ่านเริ่มต้น:\nnatthawutrit.2545@gmail.com / phasepulse\nหรือ admin / admin'
-                  )
+                    'Ask the administrator to reset your password. Demo account:\nnatthawutrit.2545@gmail.com / phasepulse\n\nOnce signed in, change it under Settings → Change password.',
+                    'ติดต่อผู้ดูแลระบบเพื่อรีเซ็ตรหัสผ่าน บัญชีทดลอง:\nnatthawutrit.2545@gmail.com / phasepulse\n\nเมื่อเข้าสู่ระบบแล้ว เปลี่ยนรหัสได้ที่ การตั้งค่า → เปลี่ยนรหัสผ่าน',
+                  ),
                 )
               }
             >
@@ -229,64 +216,48 @@ export default function LoginPage() {
             </button>
           </div>
         ) : (
-          <label className="terms">
-            <input
-              type="checkbox"
-              checked={agreeTerms}
-              onChange={(e) => setAgreeTerms(e.target.checked)}
-            />
-            <span>
-              {t(
-                'I agree to the Terms of Use and Privacy Notice.',
-                'ฉันยอมรับข้อกำหนดการใช้งานและประกาศความเป็นส่วนตัว'
-              )}
-            </span>
+          <label className="mt-3 flex cursor-pointer items-start gap-2 text-[14px] text-muted">
+            <input type="checkbox" className="mt-1" checked={agreeTerms} onChange={(e) => setAgreeTerms(e.target.checked)} />
+            <span>{t('I agree to the Terms of Use and Privacy Notice.', 'ฉันยอมรับข้อกำหนดการใช้งานและประกาศความเป็นส่วนตัว')}</span>
           </label>
         )}
 
-        <button
-          className="primary login-submit"
-          type="button"
-          onClick={submit}
-          disabled={busy}
-        >
-          <LogInIcon width={18} height={18} />
+        <button className="btn btn-primary btn-lg mt-5 w-full" type="button" onClick={() => void submit()} disabled={busy}>
+          {busy ? <span className="spinner !border-white/40 !border-t-white" /> : <LogInIcon />}
           {busy
             ? t('Please wait…', 'กำลังดำเนินการ…')
             : mode === 'login'
-            ? t('Sign in', 'เข้าสู่ระบบ')
-            : t('Create account', 'สร้างบัญชี')}
+              ? t('Sign in', 'เข้าสู่ระบบ')
+              : t('Create account', 'สร้างบัญชี')}
         </button>
 
-        <p className="login-note">
-          {t(
-            'Prototype access — Senior Project Partial Discharge Platform',
-            'การเข้าถึงระบบต้นแบบ — โครงงานวิศวกรรม Partial Discharge Analysis'
-          )}
-        </p>
-
-        <div className="mt-4 flex items-center justify-center gap-3 pt-3 border-t border-slate-200 dark:border-slate-700">
-          <img src="/logos/kmutnb.svg" alt="KMUTNB" className="h-7 w-auto opacity-75 hover:opacity-100 transition-opacity" title="KMUTNB" />
-          <img src="/logos/eng.jpg" alt="ENG" className="h-6 w-auto rounded opacity-75 hover:opacity-100 transition-opacity" title="Faculty of Engineering" />
-          <img src="/logos/ece.png" alt="ECE" className="h-7 w-auto opacity-75 hover:opacity-100 transition-opacity" title="ECE Department" />
+        <div className="mt-5 flex items-center justify-center gap-3 border-t border-line pt-4">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logos/kmutnb.svg" alt="KMUTNB" className="h-7 w-auto" title="KMUTNB" />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logos/eng.jpg" alt="ENG" className="h-6 w-auto rounded" title="Faculty of Engineering" />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logos/ece.png" alt="ECE" className="h-7 w-auto" title="ECE Department" />
         </div>
       </article>
 
       <div className="login-tools">
+        <div className="seg" role="group" aria-label={t('Language', 'ภาษา')}>
+          <button type="button" className={lang === 'en' ? 'on' : ''} onClick={() => setLang('en')}>
+            EN
+          </button>
+          <button type="button" className={lang === 'th' ? 'on' : ''} onClick={() => setLang('th')}>
+            TH
+          </button>
+        </div>
         <button
           type="button"
-          onClick={toggleLang}
-          title={t('Switch to Thai', 'เปลี่ยนเป็นภาษาอังกฤษ')}
-        >
-          <LanguagesIcon width={16} height={16} />
-          {lang.toUpperCase()}
-        </button>
-        <button
-          type="button"
+          className="tool-btn"
           onClick={toggleTheme}
+          aria-label={isDark ? t('Light mode', 'โหมดสว่าง') : t('Dark mode', 'โหมดมืด')}
           title={isDark ? t('Light mode', 'โหมดสว่าง') : t('Dark mode', 'โหมดมืด')}
         >
-          {isDark ? <SunIcon width={16} height={16} /> : <MoonIcon width={16} height={16} />}
+          {isDark ? <SunIcon /> : <MoonIcon />}
         </button>
       </div>
     </div>

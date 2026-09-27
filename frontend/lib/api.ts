@@ -9,6 +9,7 @@ import type {
   DatasetUploadResult,
   DecisionMode,
   EditHistoryEntry,
+  ModelEvaluation,
   ModelKind,
   PdCase,
   PointsResponse,
@@ -100,6 +101,51 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await res.json()) as T;
 }
 
+function errorDetail(status: number, text: string): string {
+  try {
+    const body = JSON.parse(text);
+    if (typeof body.detail === 'string') return body.detail;
+    if (Array.isArray(body.detail)) return body.detail.map((d: any) => d.msg).join(', ');
+  } catch {
+    /* not JSON */
+  }
+  return `Request failed (${status})`;
+}
+
+/**
+ * Multipart POST with upload progress. fetch() cannot report how much of the
+ * body has been sent, and a 500-image folder takes long enough that the
+ * reviewer needs to see it moving.
+ */
+function uploadWithProgress<T>(
+  path: string,
+  form: FormData,
+  onProgress?: (fraction: number) => void,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE}/api/v1${path}`);
+    const token = getToken();
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText) as T);
+        } catch {
+          reject(new ApiError(xhr.status, 'Unexpected response from the server'));
+        }
+      } else {
+        reject(new ApiError(xhr.status, errorDetail(xhr.status, xhr.responseText)));
+      }
+    };
+    xhr.onerror = () => reject(new ApiError(0, 'Network error: the server could not be reached'));
+    xhr.send(form);
+  });
+}
+
 /** Absolute URL for an image path returned by the API. */
 export function fileUrl(path: string | null): string | null {
   if (!path) return null;
@@ -142,6 +188,11 @@ export const api = {
     }),
 
   me: () => request<SessionUser>('/auth/me'),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean }>('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    }),
   logout: () => request<{ ok: boolean }>('/auth/logout', { method: 'POST' }),
   roles: () => request<{ roles: string[] }>('/auth/roles'),
 
@@ -203,6 +254,12 @@ export const api = {
   applyPreset: (id: number, presetId: number) =>
     request<PdCase>(`/cases/${id}/calibration/apply-preset/${presetId}`, { method: 'POST' }),
 
+  applyCalibrationToBatch: (id: number) =>
+    request<{ updated: number; skipped_done: number; skipped_size: number }>(
+      `/cases/${id}/calibration/apply-to-batch`,
+      { method: 'POST' },
+    ),
+
   resetCalibration: (id: number) =>
     request<PdCase>(`/cases/${id}/calibration/reset`, { method: 'POST' }),
 
@@ -248,14 +305,20 @@ export const api = {
     return request<BatchSummary>('/batches', { method: 'POST', body: form });
   },
 
-  uploadFolder: (batchId: number, files: File[]) => {
+  uploadFolder: (
+    batchId: number,
+    files: File[],
+    opts: { presetId?: number | null; onProgress?: (fraction: number) => void } = {},
+  ) => {
     const form = new FormData();
     files.forEach((f) => form.append('files', f));
-    return request<{
+    if (opts.presetId != null) form.set('preset_id', String(opts.presetId));
+    return uploadWithProgress<{
       created: PdCase[];
       rejected: { filename: string; reason: string }[];
       batch: BatchSummary;
-    }>(`/batches/${batchId}/upload`, { method: 'POST', body: form });
+      preset_applied: number;
+    }>(`/batches/${batchId}/upload`, form, opts.onProgress);
   },
 
   // ---- presets ----
@@ -304,16 +367,26 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  uploadTrainingData: (id: number, split: DatasetSplit, className: string, files: File[]) => {
+  uploadTrainingData: (
+    id: number,
+    split: DatasetSplit,
+    className: string,
+    files: File[],
+    onProgress?: (fraction: number) => void,
+  ) => {
     const form = new FormData();
     form.set('split', split);
     form.set('class_name', className);
     files.forEach((f) => form.append('files', f));
-    return request<DatasetUploadResult>(`/training/models/${id}/data`, {
-      method: 'POST',
-      body: form,
-    });
+    return uploadWithProgress<DatasetUploadResult>(
+      `/training/models/${id}/data`,
+      form,
+      onProgress,
+    );
   },
+
+  modelEvaluation: (id: number) =>
+    request<ModelEvaluation>(`/training/models/${id}/evaluation`),
 
   clearTrainingData: (id: number, split: DatasetSplit, className: string) =>
     request<Omit<DatasetUploadResult, 'accepted' | 'rejected'>>(

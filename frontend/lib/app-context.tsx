@@ -82,7 +82,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const toast = useCallback((message: string) => {
     setToastMessage(message);
     if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToastMessage(null), 2600);
+    toastTimer.current = setTimeout(() => setToastMessage(null), 3200);
   }, []);
 
   const signIn = useCallback(
@@ -124,7 +124,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   return (
     <AppContext.Provider value={value}>
       {children}
-      <div className={`toast ${toastMessage ? 'show' : ''}`}>{toastMessage}</div>
+      {toastMessage && (
+        <div className="toast" role="status" aria-live="polite" key={toastMessage}>
+          {toastMessage}
+        </div>
+      )}
     </AppContext.Provider>
   );
 }

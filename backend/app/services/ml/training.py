@@ -67,7 +67,16 @@ CANONICAL_CLASSES: list[str] = list(settings.class_names)
 MAX_EPOCHS = 12
 BATCH_SIZE = 16
 LEARNING_RATE = 0.001
-BACKBONES: tuple[str, ...] = ("scratch", "mobilenetv2")
+# MobileNetV2 transfer learning is the only backbone. The compact CNN trained
+# from scratch was removed: on datasets of this size it did not converge to
+# anything usable. Rows created before that keep "scratch" as a record only.
+BACKBONES: tuple[str, ...] = ("mobilenetv2",)
+DEFAULT_BACKBONE = "mobilenetv2"
+
+# Per-image predictions on the test set, written after a real run so the
+# Training page can show which images the model got wrong.
+EVALUATION_FILE = "evaluation.json"
+MAX_EVALUATION_SAMPLES = 1000
 
 # Guard rails for the values the wizard sends.
 EPOCH_RANGE = (1, 200)
@@ -302,11 +311,18 @@ def balance_warnings(summary: dict[str, Any], class_names: list[str]) -> list[st
 # =========================================================================
 def _load_split(
     owner_id: int, model_id: int, split: str, class_names: list[str], kind: str
-) -> tuple[np.ndarray, np.ndarray | None, np.ndarray]:
-    """Decode and preprocess one split into (PRPD batch, T-F batch, one-hot labels)."""
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, list[dict[str, str | None]]]:
+    """Decode and preprocess one split.
+
+    Returns (PRPD batch, T-F batch, one-hot labels, sources), where `sources`
+    names the file(s) behind each row relative to the model folder, so a
+    prediction can be traced back to the image it was made on.
+    """
     prpd_images: list[np.ndarray] = []
     tf_images: list[np.ndarray] = []
     labels: list[int] = []
+    sources: list[dict[str, str | None]] = []
+    root = model_dir(owner_id, model_id)
 
     for index, class_name in enumerate(class_names):
         folder = split_dir(owner_id, model_id, split, class_name)
@@ -335,12 +351,18 @@ def _load_split(
             if tf_map is not None:
                 tf_images.append(tf_map)
             labels.append(index)
+            sources.append(
+                {
+                    "prpd": prpd_path.relative_to(root).as_posix(),
+                    "tf": tf_path.relative_to(root).as_posix() if tf_path is not None else None,
+                }
+            )
 
     if not prpd_images:
         size = settings.img_size_classification
         empty = np.zeros((0, size, size, 3), dtype=np.float32)
         labels_empty = np.zeros((0, len(class_names)), dtype=np.float32)
-        return empty, (empty if kind == "hybrid" else None), labels_empty
+        return empty, (empty if kind == "hybrid" else None), labels_empty, []
 
     one_hot = np.zeros((len(labels), len(class_names)), dtype=np.float32)
     one_hot[np.arange(len(labels)), labels] = 1.0
@@ -349,55 +371,40 @@ def _load_split(
         np.stack(prpd_images).astype(np.float32),
         np.stack(tf_images).astype(np.float32) if kind == "hybrid" else None,
         one_hot,
+        sources,
     )
 
 
 # =========================================================================
 # NETWORK
 # =========================================================================
-def _build_network(
-    tf: Any, n_classes: int, kind: str, config: dict[str, Any]
-) -> tuple[Any, str | None]:
-    """One tower per input, either a compact CNN or a MobileNetV2 backbone.
+def _build_network(tf: Any, n_classes: int, kind: str, config: dict[str, Any]) -> Any:
+    """One MobileNetV2 tower per input, sharing the frozen ImageNet backbone.
 
-    Returns the model and a note when the requested backbone could not be used.
-    "scratch" is the safe default: ImageNet weights are a download, and a run
-    started from this page must still work on a container with no internet.
+    The weights are a one-off download cached under ~/.keras (the Docker image
+    fetches them at build time). Without them the run fails with a message
+    saying so, rather than silently training something weaker.
     """
     size = settings.img_size_classification
-    fallback_note: str | None = None
 
-    backbone = config.get("backbone", "scratch")
-    shared_base = None
-    if backbone == "mobilenetv2":
-        try:
-            shared_base = tf.keras.applications.MobileNetV2(
-                input_shape=(size, size, 3), include_top=False, weights="imagenet"
-            )
-            shared_base.trainable = False
-        except Exception as exc:  # no internet, or the cache is empty
-            logger.warning("MobileNetV2 weights unavailable (%s); training from scratch", exc)
-            fallback_note = (
-                "MobileNetV2 weights could not be downloaded, so the compact CNN was "
-                "trained from scratch instead."
-            )
-            shared_base = None
+    try:
+        base = tf.keras.applications.MobileNetV2(
+            input_shape=(size, size, 3), include_top=False, weights="imagenet"
+        )
+    except Exception as exc:  # no internet and no cached copy
+        raise RuntimeError(
+            "MobileNetV2 ImageNet weights could not be loaded. Connect the server to "
+            "the internet once (or rebuild the Docker image) so they can be cached, "
+            "then train again."
+        ) from exc
+    base.trainable = False
 
     def tower(name: str) -> tuple[Any, Any]:
         inputs = tf.keras.Input(shape=(size, size, 3), name=name)
-        if shared_base is not None:
-            # MobileNetV2 expects inputs in [-1, 1]; preprocessing hands over
-            # [0, 1], so rescale rather than feeding it the wrong range.
-            x = tf.keras.layers.Rescaling(2.0, offset=-1.0)(inputs)
-            x = shared_base(x, training=False)
-            return inputs, tf.keras.layers.GlobalAveragePooling2D()(x)
-
-        x = inputs
-        for filters in (32, 64, 128, 128):
-            x = tf.keras.layers.Conv2D(filters, 3, padding="same", use_bias=False)(x)
-            x = tf.keras.layers.BatchNormalization()(x)
-            x = tf.keras.layers.Activation("relu")(x)
-            x = tf.keras.layers.MaxPooling2D()(x)
+        # MobileNetV2 expects inputs in [-1, 1]; preprocessing hands over
+        # [0, 1], so rescale rather than feeding it the wrong range.
+        x = tf.keras.layers.Rescaling(2.0, offset=-1.0)(inputs)
+        x = base(x, training=False)
         return inputs, tf.keras.layers.GlobalAveragePooling2D()(x)
 
     prpd_input, prpd_features = tower("prpd_input")
@@ -422,7 +429,7 @@ def _build_network(
         loss="binary_crossentropy",
         metrics=[tf.keras.metrics.CategoricalAccuracy(name="acc")],
     )
-    return model, fallback_note
+    return model
 
 
 def _accuracy(predictions: np.ndarray, one_hot: np.ndarray) -> float:
@@ -430,6 +437,87 @@ def _accuracy(predictions: np.ndarray, one_hot: np.ndarray) -> float:
     if len(predictions) == 0:
         return 0.0
     return float(np.mean(np.argmax(predictions, axis=1) == np.argmax(one_hot, axis=1)) * 100.0)
+
+
+def evaluate_predictions(
+    predictions: np.ndarray,
+    one_hot: np.ndarray,
+    sources: list[dict[str, str | None]],
+    class_names: list[str],
+) -> dict[str, Any]:
+    """Confusion matrix, per-class figures and per-image predictions.
+
+    Rows of the matrix are the true class, columns the predicted one (argmax
+    of the sigmoid scores, as `_accuracy` uses).
+    """
+    n = len(class_names)
+    true_idx = np.argmax(one_hot, axis=1) if len(one_hot) else np.zeros(0, dtype=int)
+    pred_idx = np.argmax(predictions, axis=1) if len(predictions) else np.zeros(0, dtype=int)
+
+    confusion = np.zeros((n, n), dtype=int)
+    for t, p in zip(true_idx, pred_idx):
+        confusion[int(t), int(p)] += 1
+
+    per_class = []
+    for i, name in enumerate(class_names):
+        support = int(confusion[i].sum())
+        correct = int(confusion[i, i])
+        predicted = int(confusion[:, i].sum())
+        precision = correct / predicted if predicted else 0.0
+        recall = correct / support if support else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        per_class.append(
+            {
+                "name": name,
+                "support": support,
+                "correct": correct,
+                "precision": round(precision * 100, 2),
+                "recall": round(recall * 100, 2),
+                "f1": round(f1 * 100, 2),
+            }
+        )
+
+    samples = []
+    for row, (t, p) in enumerate(zip(true_idx, pred_idx)):
+        if row >= MAX_EVALUATION_SAMPLES:
+            break
+        source = sources[row] if row < len(sources) else {"prpd": None, "tf": None}
+        samples.append(
+            {
+                "prpd": source.get("prpd"),
+                "tf": source.get("tf"),
+                "true": class_names[int(t)],
+                "predicted": class_names[int(p)],
+                "correct": bool(t == p),
+                "scores": {
+                    name: round(float(predictions[row][i]) * 100, 2)
+                    for i, name in enumerate(class_names)
+                },
+            }
+        )
+
+    total = int(len(true_idx))
+    correct_total = int(np.trace(confusion))
+    return {
+        "class_names": class_names,
+        "confusion": confusion.tolist(),
+        "per_class": per_class,
+        "total": total,
+        "correct": correct_total,
+        "wrong": total - correct_total,
+        "accuracy": round(correct_total / total * 100, 2) if total else 0.0,
+        "samples": samples,
+    }
+
+
+def read_evaluation(owner_id: int, model_id: int) -> dict[str, Any] | None:
+    path = model_dir(owner_id, model_id) / EVALUATION_FILE
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
 
 
 # =========================================================================
@@ -504,13 +592,15 @@ def _train_with_tensorflow(
     batch_size = int(config.get("batch_size", BATCH_SIZE))
 
     _set_progress(model_id, 10, "Loading training images")
-    train_prpd, train_tf, train_y = _load_split(owner_id, model_id, "train", class_names, kind)
+    train_prpd, train_tf, train_y, _ = _load_split(owner_id, model_id, "train", class_names, kind)
     if len(train_prpd) == 0:
         raise ValueError("No readable training images were found.")
 
     _set_progress(model_id, 25, "Loading validation and test images")
-    valid_prpd, valid_tf, valid_y = _load_split(owner_id, model_id, "valid", class_names, kind)
-    test_prpd, test_tf, test_y = _load_split(owner_id, model_id, "test", class_names, kind)
+    valid_prpd, valid_tf, valid_y, _ = _load_split(owner_id, model_id, "valid", class_names, kind)
+    test_prpd, test_tf, test_y, test_sources = _load_split(
+        owner_id, model_id, "test", class_names, kind
+    )
 
     if not len(valid_prpd):
         # No validation folder: hold out a slice of the training set so early
@@ -528,7 +618,7 @@ def _train_with_tensorflow(
     valid_inputs = [valid_prpd, valid_tf] if kind == "hybrid" else valid_prpd
 
     _set_progress(model_id, 30, "Building the network")
-    network, fallback_note = _build_network(tf, len(class_names), kind, config)
+    network = _build_network(tf, len(class_names), kind, config)
 
     class _Progress(tf.keras.callbacks.Callback):
         def on_epoch_end(self, epoch: int, logs: dict[str, Any] | None = None) -> None:
@@ -552,10 +642,14 @@ def _train_with_tensorflow(
     )
 
     _set_progress(model_id, 90, "Evaluating on the test set")
+    evaluation: dict[str, Any] | None = None
     if len(test_prpd):
         test_inputs = [test_prpd, test_tf] if kind == "hybrid" else test_prpd
-        accuracy = _accuracy(network.predict(test_inputs, verbose=0), test_y)
+        predictions = network.predict(test_inputs, verbose=0)
+        accuracy = _accuracy(predictions, test_y)
         measured_on = "the held-out test set"
+        evaluation = evaluate_predictions(predictions, test_y, test_sources, class_names)
+        evaluation["split"] = "test"
     else:
         accuracy = float(history.history.get("acc", [0.0])[-1] * 100.0)
         measured_on = "the training set (no test images were uploaded)"
@@ -567,8 +661,15 @@ def _train_with_tensorflow(
 
     val_accuracy = history.history.get("val_acc")
     note = f"Accuracy measured on {measured_on}."
-    if fallback_note:
-        note = f"{note} {fallback_note}"
+
+    # Learning curve and per-image results, read back by the Training page.
+    curves = {
+        key: [round(float(v), 4) for v in history.history.get(key, [])]
+        for key in ("loss", "val_loss", "acc", "val_acc")
+    }
+    (model_dir(owner_id, model_id) / EVALUATION_FILE).write_text(
+        json.dumps({"history": curves, **(evaluation or {})}), encoding="utf-8"
+    )
 
     return {
         "accuracy": round(accuracy, 2),
@@ -597,7 +698,7 @@ def _run(model_id: int) -> None:
             "max_epochs": row.max_epochs,
             "batch_size": row.batch_size,
             "learning_rate": row.learning_rate,
-            "backbone": row.backbone,
+            "backbone": DEFAULT_BACKBONE,
         }
         row.status = "running"
         row.started_at = datetime.now(timezone.utc)

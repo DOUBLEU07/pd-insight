@@ -1,12 +1,15 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 
-import { PrpdCanvas, NudgeRow, type Frame, type Handle } from '@/components/case/PrpdCanvas';
+import { NudgeRow, PrpdCanvas, type Frame, type Handle } from '@/components/case/PrpdCanvas';
 import { SummaryChart, downloadSummaryImage } from '@/components/case/SummaryChart';
 import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
   CheckIcon,
+  CopyIcon,
   DownloadIcon,
   GearDetectIcon,
   RefreshIcon,
@@ -15,9 +18,11 @@ import {
   XIcon,
 } from '@/components/ui/icons';
 import {
+  Collapse,
   KV,
   Readout,
   Spinner,
+  StatusBadge,
   fmt,
   fmtDate,
   resultPillClass,
@@ -26,45 +31,43 @@ import {
 import { api, fileUrl } from '@/lib/api';
 import { useApp } from '@/lib/app-context';
 import { useI18n } from '@/lib/i18n';
+import { serverText } from '@/lib/server-text';
 import type { CalibrationPreset, PdCase, ReviewStatus } from '@/lib/types';
 
-const STEPS = [
-  { key: 'classification', label: 'Classification' },
-  { key: 'calibration', label: 'Calibration' },
-  { key: 'gap', label: 'Gap-Time' },
-  { key: 'summary', label: 'Summary' },
-  { key: 'signoff', label: 'Sign-off' },
-] as const;
+type StepKey = 'classification' | 'calibration' | 'gap' | 'summary' | 'signoff';
+const STEP_KEYS: StepKey[] = ['classification', 'calibration', 'gap', 'summary', 'signoff'];
 
-type StepKey = (typeof STEPS)[number]['key'];
+type T = <V = string>(en: V, th: V) => V;
 
-/**
- * Why a case ended up with its result, in plain language. The raw rule id the
- * backend recorded is kept as a tooltip on the row, so the reading stays human
- * without losing the traceable value.
- */
-const AI_STATUS_LABELS: Record<string, string> = {
-  identified_by_top_class_gt_30: 'The highest-scoring class passed the 30% threshold.',
-  non_identified_all_classes_le_30:
-    'No class reached 30%, so the case is reported as Non-identified.',
-  rule_rejected_internal:
-    'Internal scored high but failed the quadrant sanity check, so the result was overridden to Non-identified.',
-  identified: 'One class passed the confidence threshold.',
-  low_confidence_or_mixed: 'No single class stood out clearly enough to be identified.',
-  identified_loose: 'The highest-scoring class passed the threshold.',
-  below_threshold_loose: 'The highest-scoring class stayed below the threshold.',
-  hybrid_inconclusive: 'No class reached 85%, so the result is inconclusive.',
-  hybrid_identified: 'Exactly one class passed 85%.',
-  hybrid_mixed: 'More than one class passed 85%, which suggests mixed PD.',
-};
+/** Why a case ended up with its result, in plain language. */
+function aiStatusLabel(status: string | null, t: T): string | null {
+  const labels: Record<string, string> = {
+    identified_by_top_class_gt_30: t('The highest-scoring class passed the threshold.', 'คลาสที่คะแนนสูงสุดผ่านเกณฑ์'),
+    non_identified_all_classes_le_30: t(
+      'No class reached the threshold, so the case is reported as Non-identified.',
+      'ไม่มีคลาสใดถึงเกณฑ์ จึงรายงานเป็น Non-identified',
+    ),
+    rule_rejected_internal: t(
+      'Internal scored high but failed the quadrant sanity check, so it was overridden to Non-identified.',
+      'Internal ได้คะแนนสูงแต่ไม่ผ่านการตรวจสอบจตุภาค จึงถูกเปลี่ยนเป็น Non-identified',
+    ),
+    identified: t('One class passed the confidence threshold.', 'มีหนึ่งคลาสผ่านเกณฑ์ความมั่นใจ'),
+    low_confidence_or_mixed: t('No single class stood out clearly enough.', 'ไม่มีคลาสใดโดดเด่นพอ'),
+    identified_loose: t('The highest-scoring class passed the threshold.', 'คลาสที่คะแนนสูงสุดผ่านเกณฑ์'),
+    below_threshold_loose: t('The highest-scoring class stayed below the threshold.', 'คลาสที่คะแนนสูงสุดยังต่ำกว่าเกณฑ์'),
+    hybrid_inconclusive: t('No class reached 85%, so the result is inconclusive.', 'ไม่มีคลาสใดถึง 85% ผลจึงสรุปไม่ได้'),
+    hybrid_identified: t('Exactly one class passed 85%.', 'มีหนึ่งคลาสที่ผ่าน 85%'),
+    hybrid_mixed: t('More than one class passed 85%, which suggests mixed PD.', 'มีมากกว่าหนึ่งคลาสผ่าน 85% อาจเป็น PD แบบผสม'),
+  };
+  return status ? labels[status] ?? status : null;
+}
 
-/** How the case was analysed, written out rather than shown as an engine id. */
-function describeModel(modelUsed: string | null, inputMode: string | null): string {
+function describeModel(modelUsed: string | null, inputMode: string | null, t: T): string {
   const hybrid = (inputMode ?? '').toUpperCase().includes('HYBRID');
   const base = hybrid
-    ? 'Hybrid model, using PRPD paired with TF Map'
-    : 'PRPD-only model, using a single PRPD image';
-  return /mock/i.test(modelUsed ?? '') ? `${base} (mock engine, not a real prediction)` : base;
+    ? t('Hybrid model (PRPD + TF map)', 'โมเดล Hybrid (PRPD + TF Map)')
+    : t('PRPD-only model', 'โมเดล PRPD-only');
+  return /mock/i.test(modelUsed ?? '') ? `${base} · ${t('mock engine, not a real prediction', 'โหมดจำลอง ไม่ใช่ผลทำนายจริง')}` : base;
 }
 
 function CaseWizardPage() {
@@ -73,25 +76,20 @@ function CaseWizardPage() {
   const searchParams = useSearchParams();
   const caseId = Number(params.id);
   const { options, toast, user } = useApp();
-  const { t, lang } = useI18n();
-  const [lockSpan, setLockSpan] = useState(false);
+  const { t } = useI18n();
 
   const [pdCase, setPdCase] = useState<PdCase | null>(null);
   const [loading, setLoading] = useState(true);
   const [step, setStep] = useState<StepKey>('classification');
   const [saving, setSaving] = useState(false);
-  const [matchedPreset, setMatchedPreset] = useState<CalibrationPreset | null>(null);
-  /** The other cases in this case's queue, for position and next-case hand-off. */
+  const [presets, setPresets] = useState<CalibrationPreset[]>([]);
   const [siblings, setSiblings] = useState<PdCase[]>([]);
 
   // Local mirrors so dragging stays smooth; committed to the API on release.
   const [frame, setFrame] = useState<Frame | null>(null);
-  const [gapLines, setGapLines] = useState<{ left: number | null; right: number | null }>({
-    left: null,
-    right: null,
-  });
+  const [gapLines, setGapLines] = useState<{ left: number | null; right: number | null }>({ left: null, right: null });
+  const [axesSaved, setAxesSaved] = useState<'idle' | 'saving' | 'saved'>('idle');
 
-  // Sign-off form
   const [reviewStatus, setReviewStatus] = useState<ReviewStatus>('user_confirmed');
   const [reviewNote, setReviewNote] = useState('');
   const [notMeasurableReason, setNotMeasurableReason] = useState('single_discharge_cluster');
@@ -99,14 +97,13 @@ function CaseWizardPage() {
   const returnTo = searchParams.get('from');
   const batchParam = searchParams.get('batch');
 
-  // ---------------------------------------------------------------- loading
   const applyCase = useCallback((c: PdCase) => {
     setPdCase(c);
     setFrame({
       x_left: c.calibration.x_left_0deg ?? 0,
-      x_right: c.calibration.x_right_360deg ?? (c.image_width ?? 400),
+      x_right: c.calibration.x_right_360deg ?? c.image_width ?? 400,
       y_top: c.calibration.y_top_plot ?? 0,
-      y_bottom: c.calibration.y_bottom_plot ?? (c.image_height ?? 300),
+      y_bottom: c.calibration.y_bottom_plot ?? c.image_height ?? 300,
     });
     setGapLines({ left: c.gap.left_line_pixel, right: c.gap.right_line_pixel });
     setReviewStatus(c.review_status);
@@ -114,46 +111,42 @@ function CaseWizardPage() {
     if (c.not_measurable_reason) setNotMeasurableReason(c.not_measurable_reason);
   }, []);
 
+  const loadPresets = useCallback(async () => {
+    try {
+      setPresets(await api.listPresets());
+    } catch {
+      setPresets([]);
+    }
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true);
     setStep('classification');
     try {
       let c = await api.getCase(caseId);
-      // Opening an un-analysed case runs the pipeline, matching the prototype's
-      // behaviour when a case is opened straight from the queue.
       if (!c.analysis_run) c = await api.analyze(c.id);
       applyCase(c);
-      const { preset } = await api.matchingPreset(caseId);
-      setMatchedPreset(preset);
-      // Siblings drive the queue position and the "next case" hand-off. A case
-      // imported from a folder is scoped to its batch; a single upload falls
-      // back to the whole workspace.
+      void loadPresets();
       setSiblings(await api.listCases(c.batch_id != null ? { batch_id: c.batch_id } : {}));
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Failed to load case');
+      toast(e instanceof Error ? e.message : t('Could not load this case', 'โหลดเคสนี้ไม่สำเร็จ'));
     } finally {
       setLoading(false);
     }
-  }, [caseId, applyCase, toast]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [caseId, applyCase, toast, loadPresets]);
 
   useEffect(() => {
     if (Number.isFinite(caseId)) void load();
   }, [caseId, load]);
 
   // ------------------------------------------------------------------ queue
-  // Position of this case in its queue, and where "next" leads. Declared
-  // before the loading guard so the action handlers below can close over them.
   const queueIndex = siblings.findIndex((s) => s.id === caseId);
   const queueTotal = siblings.length;
   const queueDone = siblings.filter((s) => s.status === 'done').length;
   const prevCase = queueIndex > 0 ? siblings[queueIndex - 1] : null;
   const nextCase = queueIndex >= 0 && queueIndex < queueTotal - 1 ? siblings[queueIndex + 1] : null;
 
-  /**
-   * The next case still awaiting review, searching forward from this one and
-   * wrapping around, so a reviewer working a folder never has to return to the
-   * queue to find what is left.
-   */
   const nextPending = useMemo(() => {
     if (queueIndex < 0) return null;
     for (let i = 1; i <= queueTotal; i += 1) {
@@ -173,25 +166,28 @@ function CaseWizardPage() {
 
   function goBack() {
     if (returnTo === 'batch' && batchParam) router.push(`/batches/${batchParam}`);
-    else if (returnTo === 'queue') router.push('/cases?mode=folder');
-    else router.push('/cases');
+    else if (pdCase?.batch_id != null && returnTo !== 'results') router.push(`/batches/${pdCase.batch_id}`);
+    else router.push('/cases?mode=results');
   }
 
   // ---------------------------------------------------------------- actions
-  async function commitCalibration(next: Frame, source = 'manual_axis_adjusted') {
+  async function commitCalibration(next: Frame) {
     if (!pdCase) return;
+    setAxesSaved('saving');
     try {
       const updated = await api.updateCalibration(pdCase.id, {
         x_left_0deg: next.x_left,
         x_right_360deg: next.x_right,
         y_top_plot: next.y_top,
         y_bottom_plot: next.y_bottom,
-        calibration_source: source,
+        calibration_source: 'manual_axis_adjusted',
         calibration_mode: 'Manual calibration',
       });
       applyCase(updated);
+      setAxesSaved('saved');
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Calibration update failed');
+      setAxesSaved('idle');
+      toast(e instanceof Error ? e.message : t('Could not save the axes', 'บันทึกแกนไม่สำเร็จ'));
       void load();
     }
   }
@@ -201,7 +197,7 @@ function CaseWizardPage() {
     try {
       applyCase(await api.updateGap(pdCase.id, left, right));
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Gap update failed');
+      toast(e instanceof Error ? e.message : t('Could not save the gap lines', 'บันทึกเส้น Gap ไม่สำเร็จ'));
       void load();
     }
   }
@@ -215,67 +211,22 @@ function CaseWizardPage() {
     void commitCalibration({ ...frame, [handle]: value } as Frame);
   }
 
+  function nudgeCalib(handle: Handle, delta: number) {
+    if (!frame) return;
+    const key = handle as keyof Frame;
+    const next = { ...frame, [key]: frame[key] + delta };
+    setFrame(next);
+    void commitCalibration(next);
+  }
+
   function onGapDrag(handle: Handle, value: number) {
     setGapLines((g) => (handle === 'gapLeft' ? { ...g, left: value } : { ...g, right: value }));
   }
 
   function onGapDragEnd(handle: Handle, value: number) {
-    const next =
-      handle === 'gapLeft'
-        ? { left: value, right: gapLines.right }
-        : { left: gapLines.left, right: value };
+    const next = handle === 'gapLeft' ? { left: value, right: gapLines.right } : { left: gapLines.left, right: value };
     if (next.left == null || next.right == null) return;
     void commitGap(next.left, next.right);
-  }
-
-  function nudgeCalib(handle: Handle, delta: number) {
-    if (!frame) return;
-    const next = { ...frame, [handle]: (frame as any)[handle] + delta } as Frame;
-    setFrame(next);
-    void commitCalibration(next);
-  }
-
-  function onDragPair(left: number, right: number) {
-    setGapLines({ left, right });
-  }
-
-  function onDragEndPair(left: number, right: number) {
-    void commitGap(left, right);
-  }
-
-  function onDragFramePair(nextFrame: Frame) {
-    setFrame(nextFrame);
-  }
-
-  function onDragEndFramePair(nextFrame: Frame) {
-    void commitCalibration(nextFrame);
-  }
-
-  function nudgePair(type: 'gap' | 'frame' | 'y', delta: number) {
-    if (type === 'gap') {
-      if (gapLines.left == null || gapLines.right == null || !frame) return;
-      const span = gapLines.right - gapLines.left;
-      let nextLeft = gapLines.left + delta;
-      let nextRight = gapLines.right + delta;
-      if (nextLeft < frame.x_left) {
-        nextLeft = frame.x_left;
-        nextRight = nextLeft + span;
-      }
-      if (nextRight > frame.x_right) {
-        nextRight = frame.x_right;
-        nextLeft = nextRight - span;
-      }
-      setGapLines({ left: nextLeft, right: nextRight });
-      void commitGap(nextLeft, nextRight);
-    } else if (type === 'frame') {
-      if (!frame) return;
-      const span = frame.x_right - frame.x_left;
-      const nextLeft = Math.max(0, frame.x_left + delta);
-      const nextRight = nextLeft + span;
-      const next = { ...frame, x_left: nextLeft, x_right: nextRight };
-      setFrame(next);
-      void commitCalibration(next);
-    }
   }
 
   function nudgeGap(handle: Handle, delta: number) {
@@ -295,12 +246,16 @@ function CaseWizardPage() {
       applyCase(updated);
       const d = updated.detection;
       if (d?.single_cluster) {
-        toast('Only one discharge cluster found, so gap-time is not measurable');
+        toast(t('Only one discharge cluster found, so gap-time is not measurable.', 'พบกลุ่มการคายประจุเพียงกลุ่มเดียว จึงวัด Gap-Time ไม่ได้'));
       } else if (d) {
-        toast(`Gap lines placed via ${d.source === 'ai_auto' ? 'regression model' : 'rule-based detection'}`);
+        toast(
+          d.source === 'ai_auto'
+            ? t('Gap lines placed by the regression model', 'วางเส้น Gap ด้วยโมเดล Regression แล้ว')
+            : t('Gap lines placed by rule-based detection', 'วางเส้น Gap ด้วยการตรวจจับตามกฎแล้ว'),
+        );
       }
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Gap detection failed');
+      toast(e instanceof Error ? e.message : t('Gap detection failed', 'ตรวจจับ Gap ไม่สำเร็จ'));
     }
   }
 
@@ -309,34 +264,10 @@ function CaseWizardPage() {
     try {
       applyCase(await api.confirmPdSource(pdCase.id, value));
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Failed to update PD source');
+      toast(e instanceof Error ? e.message : t('Could not update the PD source', 'เปลี่ยนแหล่ง PD ไม่สำเร็จ'));
     }
   }
 
-  async function savePreset() {
-    if (!pdCase || !frame) return;
-    try {
-      await api.createPreset({
-        preset_name: `${pdCase.case_base_name}_preset`,
-        image_width: pdCase.image_width ?? 0,
-        image_height: pdCase.image_height ?? 0,
-        x_left_0deg: frame.x_left,
-        x_right_360deg: frame.x_right,
-        y_top_plot: frame.y_top,
-        y_bottom_plot: frame.y_bottom,
-        example_prpd_filename: pdCase.prpd_filename,
-        example_tf_filename: pdCase.tf_filename,
-        remark: 'Saved from this case',
-      });
-      toast('Calibration preset saved');
-      const { preset } = await api.matchingPreset(pdCase.id);
-      setMatchedPreset(preset);
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Failed to save preset');
-    }
-  }
-
-  /** Saves the review. Returns true only when the save actually landed. */
   async function submitReview(statusOverride?: ReviewStatus): Promise<boolean> {
     if (!pdCase) return false;
     const status = statusOverride ?? reviewStatus;
@@ -349,289 +280,224 @@ function CaseWizardPage() {
         confirmed_pd_source_type: pdCase.confirmed_pd_source_type ?? undefined,
       });
       applyCase(updated);
-      // Keep the queue counters honest after this case flips to done.
       setSiblings((rows) => rows.map((r) => (r.id === updated.id ? updated : r)));
-      toast(`Saved results for ${updated.case_base_name} (${updated.review_status})`);
+      toast(t(`Saved the review of ${updated.case_base_name}`, `บันทึกผลตรวจ ${updated.case_base_name} แล้ว`));
       return true;
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Save failed');
+      toast(e instanceof Error ? e.message : t('Save failed', 'บันทึกไม่สำเร็จ'));
       return false;
     } finally {
       setSaving(false);
     }
   }
 
-  /** Move to the next unreviewed case, or leave the queue when none is left. */
   function advance() {
-    const next = nextPending;
-    if (!next) {
-      toast('All cases in this queue are reviewed');
+    if (!nextPending) {
+      toast(t('Every case in this folder is reviewed', 'ตรวจครบทุกเคสในโฟลเดอร์นี้แล้ว'));
       goBack();
       return;
     }
-    goToCase(next.id);
+    goToCase(nextPending.id);
   }
 
-  /**
-   * Save, then move straight on. A case that is already signed off skips the
-   * save so a second click never rewrites a stored review.
-   */
-  async function saveAndAdvance(statusOverride?: ReviewStatus) {
-    if (pdCase?.status === 'done' && statusOverride === undefined) {
+  async function saveAndAdvance() {
+    if (pdCase?.status === 'done') {
       advance();
       return;
     }
-    if (await submitReview(statusOverride)) advance();
+    if (await submitReview()) advance();
   }
 
   // ---------------------------------------------------------------- render
-  if (loading || !pdCase || !frame) return <Spinner label="Loading case…" />;
+  if (loading || !pdCase || !frame) return <Spinner label={t('Loading case…', 'กำลังโหลดเคส…')} />;
 
   const c = pdCase;
   const conf = c.confidence;
   const gap = c.gap;
-  const stepIndex = STEPS.findIndex((s) => s.key === step);
+  const stepIndex = STEP_KEYS.indexOf(step);
   const prpdUrl = fileUrl(c.prpd_url);
 
-  const backLabel =
-    returnTo === 'queue'
-      ? '← Back to case queue'
-      : returnTo === 'batch'
-        ? '← Back to Preview'
-        : '← Back to Case Workflow';
+  const stepLabels: Record<StepKey, string> = {
+    classification: t('Classification', 'ผลการจำแนก'),
+    calibration: t('Plot axes', 'ปรับแกนกราฟ'),
+    gap: 'Gap-Time',
+    summary: t('Summary', 'สรุปผล'),
+    signoff: t('Sign-off', 'ยืนยันผล'),
+  };
 
-  // The decision rule is no longer switchable per case, so this reads back the
-  // stored mode purely as a record of how the result was reached.
   const decisionMode = options?.decision_modes.find((m) => m.key === c.decision_mode);
-  const decisionModeLabel = decisionMode?.label ?? c.decision_mode;
-  const decisionModeDescription = decisionMode?.description ?? '';
-
   const singleCluster = gap.auto_not_measurable_recommended === true;
   const alreadySaved = c.status === 'done';
-  // The API rejects a measurable status on a single-cluster case, so offering
-  // "Save and Next" there would only produce a failed save.
   const advanceBlocked = singleCluster && !alreadySaved && reviewStatus !== 'not_measurable';
+  const inFolder = c.batch_id != null && queueTotal > 1;
 
   return (
     <>
-      <div className="case-nav-bar">
-        <div>
-          Case <b>{c.case_base_name}</b>
-          {c.defect_name && <span className="text-slate-500"> · {c.defect_name}</span>}
-          {c.inference_engine === 'mock' && (
-            <span className="pill pill-amber ml-2">mock inference</span>
-          )}
-        </div>
-        <div className="ml-auto flex items-center gap-[14px]">
-          {queueTotal > 1 && queueIndex >= 0 && (
-            <div className="flex items-center gap-[10px]">
-              <span className="text-[12px] text-brand-700/70">
-                Case <b>{queueIndex + 1}</b> of {queueTotal} · {queueDone} done
-              </span>
-              <div className="queue-step-grp">
-                <button
-                  type="button"
-                  disabled={!prevCase}
-                  title={prevCase ? `Previous: ${prevCase.case_base_name}` : 'First case'}
-                  onClick={() => prevCase && goToCase(prevCase.id)}
-                >
-                  ←
-                </button>
-                <button
-                  type="button"
-                  disabled={!nextCase}
-                  title={nextCase ? `Next: ${nextCase.case_base_name}` : 'Last case'}
-                  onClick={() => nextCase && goToCase(nextCase.id)}
-                >
-                  →
-                </button>
-              </div>
-            </div>
-          )}
-          <span className="small-link" onClick={goBack}>
-            {backLabel}
-          </span>
-        </div>
+      <div className="case-bar">
+        <button type="button" className="btn btn-ghost btn-sm" onClick={goBack}>
+          <ArrowLeftIcon />
+          {inFolder ? t('Folder', 'โฟลเดอร์') : t('Results', 'ผลการประเมิน')}
+        </button>
+        <span className="case-name">{c.case_base_name}</span>
+        <StatusBadge status={c.status} />
+        {c.inference_engine === 'mock' && <span className="pill pill-amber">{t('mock inference', 'ผลจำลอง')}</span>}
+        {queueTotal > 1 && queueIndex >= 0 && (
+          <div className="ml-auto flex items-center gap-2 text-[14px] text-muted">
+            <span>
+              {t(`Case ${queueIndex + 1} of ${queueTotal} · ${queueDone} reviewed`, `เคส ${queueIndex + 1} จาก ${queueTotal} · ตรวจแล้ว ${queueDone}`)}
+            </span>
+            <button
+              type="button"
+              className="icon-only"
+              disabled={!prevCase}
+              title={prevCase ? prevCase.case_base_name : ''}
+              aria-label={t('Previous case', 'เคสก่อนหน้า')}
+              onClick={() => prevCase && goToCase(prevCase.id)}
+            >
+              <ArrowLeftIcon />
+            </button>
+            <button
+              type="button"
+              className="icon-only"
+              disabled={!nextCase}
+              title={nextCase ? nextCase.case_base_name : ''}
+              aria-label={t('Next case', 'เคสถัดไป')}
+              onClick={() => nextCase && goToCase(nextCase.id)}
+            >
+              <ArrowRightIcon />
+            </button>
+          </div>
+        )}
       </div>
 
-      <div className="wizard-nav">
-        {STEPS.map((s, i) => (
+      <div className="stepper" role="tablist">
+        {STEP_KEYS.map((key, i) => (
           <button
-            key={s.key}
-            className={`wizard-step-btn ${step === s.key ? 'active' : ''} ${
-              i < stepIndex ? 'done' : ''
-            }`}
-            onClick={() => setStep(s.key)}
+            key={key}
             type="button"
+            role="tab"
+            aria-selected={step === key}
+            className={`step-btn ${step === key ? 'on' : ''} ${i < stepIndex ? 'done' : ''}`}
+            onClick={() => setStep(key)}
           >
-            <span className="wizard-step-no">{i + 1}</span>
-            <span>{s.label}</span>
+            <span className="step-no">{i < stepIndex ? <CheckIcon width={13} height={13} /> : i + 1}</span>
+            {stepLabels[key]}
           </button>
         ))}
       </div>
 
       {/* ================= STEP 1: CLASSIFICATION ================= */}
       {step === 'classification' && (
-        <div className="wizard-2col">
-          <div className="card mb-0">
-            <h2>
-              Classification Result{' '}
-              <span className="text-[11px] font-medium text-slate-400">read-only</span>
-            </h2>
-            <div className="callout callout-red mb-[10px]">
-              <b>Preliminary assessment, not a diagnosis.</b> The model recognises Corona, Surface
-              and Internal only; mixed or multiple PD sources may be classified incorrectly, and a
-              confidence score is not proof that the class is correct. Review against the
-              measurement data before signing off.
-            </div>
-            <div className="locked-banner">
-              This is the raw output of the model and decision rules and cannot be edited here, so
-              it always remains traceable. Confirm the PD source on the right, then sign off at the
-              end of this workflow.
+        <div className="split">
+          <section className="card">
+            <div className="card-head">
+              <div>
+                <h2 className="card-title">
+                  {t('Classification result', 'ผลการจำแนก')} <span className="tag">{t('read-only', 'อ่านอย่างเดียว')}</span>
+                </h2>
+                <p className="card-sub">{describeModel(c.ai_model_used, c.ai_input_mode, t)}</p>
+              </div>
+              <span className={`pill ${resultPillClass(c.ai_final_result)} !text-[15px]`}>{c.ai_final_result ?? '-'}</span>
             </div>
 
-            {/* Input quality sits with the result it qualifies: a size mismatch
-                means auto-calibration cannot be trusted, which propagates all
-                the way to gap-time and severity. */}
             {c.input_quality && c.input_quality.input_warning_count > 0 && (
-              <div className="locked-banner border-amber-200 bg-amber-50 text-amber-700">
+              <div className="callout callout-amber mb-3">
                 <b>
-                  Input check: {c.input_quality.input_check_status} (
-                  {c.input_quality.input_warning_count} warning
-                  {c.input_quality.input_warning_count === 1 ? '' : 's'})
+                  {t(
+                    `Input check: ${c.input_quality.input_warning_count} warning(s)`,
+                    `ตรวจสอบข้อมูลนำเข้า: ${c.input_quality.input_warning_count} คำเตือน`,
+                  )}
                 </b>
-                <ul className="mt-1 list-disc pl-4">
-                  {c.input_quality.input_warnings.map((wmsg, i) => (
-                    <li key={i}>{wmsg}</li>
+                <ul className="bullets mt-1">
+                  {c.input_quality.input_warnings.map((w, i) => (
+                    <li key={i}>{serverText(w, t)}</li>
                   ))}
                 </ul>
               </div>
             )}
 
-            <div className="row">
-              <div className="col">
-                {([
-                  ['Corona', conf.corona, 'fill-corona'],
-                  ['Surface', conf.surface, 'fill-surface'],
-                  ['Internal', conf.internal, 'fill-internal'],
-                ] as const).map(([label, value, fill]) => (
+            <div className="grid gap-5 md:grid-cols-2">
+              <div>
+                {(
+                  [
+                    ['Corona', conf.corona, 'fill-corona'],
+                    ['Surface', conf.surface, 'fill-surface'],
+                    ['Internal', conf.internal, 'fill-internal'],
+                  ] as const
+                ).map(([label, value, fill]) => (
                   <div className="conf-row" key={label}>
                     <div className="conf-label">{label}</div>
-                    <div className="conf-bar-bg">
-                      <div
-                        className={`conf-bar-fill ${fill}`}
-                        style={{ width: `${Math.min(100, value ?? 0)}%` }}
-                      />
+                    <div className="conf-track">
+                      <div className={`conf-fill ${fill}`} style={{ width: `${Math.min(100, value ?? 0)}%` }} />
                     </div>
-                    <div className="conf-val">{fmt(value, 2, '%')}</div>
+                    <div className="conf-val">{fmt(value, 1, '%')}</div>
                   </div>
                 ))}
-                <p className="hint mt-[6px]">
-                  Independent per-class scores (sigmoid), not softmax. The three values are not
-                  required to sum to 100%.
+                <p className="hint mt-3 text-[13px]">
+                  {t(
+                    'Each class is scored independently (sigmoid), so the three values need not add up to 100%.',
+                    'แต่ละคลาสให้คะแนนแยกกัน (Sigmoid) ผลรวมจึงไม่จำเป็นต้องเท่ากับ 100%',
+                  )}
                 </p>
               </div>
-
-              <div className="col">
-                <KV
-                  rows={[
-                    [
-                      'Result',
-                      <span className={`pill ${resultPillClass(c.ai_final_result)}`} key="r">
-                        {c.ai_final_result ?? '-'}
-                      </span>,
-                    ],
-                    // Only worth a row when the reported result is not simply the
-                    // highest score. An override is exactly what a reviewer needs
-                    // to notice.
-                    ...(c.ai_top_class && c.ai_top_class !== c.ai_final_result
-                      ? ([
-                          [
-                            'Highest score was',
-                            `${c.ai_top_class} (${fmt(c.ai_top_score_percent, 2, '%')})`,
-                          ],
-                        ] as [ReactNode, ReactNode][])
-                      : []),
-                    [
-                      'Why this result',
-                      <span key="w" title={c.ai_decision_rule ?? undefined}>
-                        {AI_STATUS_LABELS[c.ai_status ?? ''] ?? c.ai_status ?? '-'}
-                      </span>,
-                    ],
-                    ...((c.ai_non_identified_percent ?? 0) > 0
-                      ? ([
-                          [
-                            'Non-identified score',
-                            fmt(c.ai_non_identified_percent, 1, '%'),
-                          ],
-                        ] as [ReactNode, ReactNode][])
-                      : []),
-                    [
-                      'Analysed with',
-                      <span key="m" title={`${c.ai_model_used ?? ''} · ${c.ai_input_mode ?? ''}`}>
-                        {describeModel(c.ai_model_used, c.ai_input_mode)}
-                      </span>,
-                    ],
-                  ]}
-                />
-              </div>
+              <KV
+                rows={[
+                  ...(c.ai_top_class && c.ai_top_class !== c.ai_final_result
+                    ? ([[t('Highest score', 'คะแนนสูงสุด'), `${c.ai_top_class} (${fmt(c.ai_top_score_percent, 1, '%')})`]] as [ReactNode, ReactNode][])
+                    : []),
+                  [
+                    t('Why this result', 'เหตุผลของผลนี้'),
+                    <span key="w" title={c.ai_decision_rule ?? undefined}>
+                      {aiStatusLabel(c.ai_status, t) ?? '-'}
+                    </span>,
+                  ],
+                  [t('Threshold applied', 'เกณฑ์ที่ใช้'), fmt(c.ai_threshold_percent, 0, '%')],
+                  [t('Classes over threshold', 'คลาสที่ผ่านเกณฑ์'), c.ai_high_conf_count ?? '-'],
+                ]}
+              />
             </div>
 
-            <div className="mt-4">
-              <label className="field-label mb-[6px]">Imported PRPD plot</label>
-              {prpdUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={prpdUrl}
-                  alt="PRPD plot"
-                  className="max-h-[300px] rounded-lg border-[1.5px] border-slate-200 bg-white"
-                />
-              ) : (
-                <p className="hint">No PRPD image stored for this case.</p>
+            {prpdUrl && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={prpdUrl} alt="PRPD" className="image-frame mt-4 max-h-[260px]" />
+            )}
+
+            <p className="callout callout-red mt-4 text-[13.5px]">
+              <b>{t('Preliminary assessment, not a diagnosis.', 'เป็นการประเมินเบื้องต้น ไม่ใช่การวินิจฉัย')}</b>{' '}
+              {t(
+                'The model knows Corona, Surface and Internal only; mixed PD may be misclassified.',
+                'โมเดลรู้จักเฉพาะ Corona, Surface และ Internal ส่วน PD แบบผสมอาจจำแนกผิด',
               )}
-            </div>
-          </div>
+            </p>
+          </section>
 
-          <div className="wizard-2col-side">
-            {/* ---- PD Source ---- */}
-            <div className="card mb-0">
-              <h2>PD Source</h2>
-              <p className="hint">
-                Rule-based suggestion from the confidence scores. Confirm or override it: the
-                confirmed value feeds the Gap-Time severity determination.
+          <div className="stack">
+            <section className="card">
+              <h2 className="card-title mb-1">{t('PD source', 'แหล่งกำเนิด PD')}</h2>
+              <p className="card-sub mb-3">
+                {t(
+                  'Suggested from the scores. Confirm or change it: the confirmed source decides the severity table.',
+                  'ระบบแนะนำจากคะแนน ยืนยันหรือเปลี่ยนได้ แหล่งที่ยืนยันจะใช้กำหนดตารางความรุนแรง',
+                )}
               </p>
               <KV
                 rows={[
-                  ['Rule class', c.pd_rule_class ?? '-'],
-                  [
-                    'Suggested PD source',
-                    <b key="s">{c.suggested_pd_source_type ?? '-'}</b>,
-                  ],
-                  [
-                    'Matched condition',
-                    <span className="text-[11.5px] text-slate-500" key="m">
-                      {c.pd_selection_rule ?? '-'}
-                    </span>,
-                  ],
+                  [t('Suggested', 'ที่แนะนำ'), <b key="s">{c.suggested_pd_source_type ?? '-'}</b>],
+                  [t('Matched rule', 'กฎที่ตรง'), <span key="m" className="text-[13.5px] text-muted">{c.pd_selection_rule ?? '-'}</span>],
                 ]}
               />
-              <div
-                className="strong-rule-flag mt-[10px] rounded-md px-[13px] py-[9px] text-[12.5px]"
-                style={{ background: c.is_strong_pd_rule ? '#ECFDF5' : '#FFFBEB' }}
-              >
+              <div className="mt-3">
                 <span className={`pill ${c.is_strong_pd_rule ? 'pill-green' : 'pill-amber'}`}>
                   {c.is_strong_pd_rule
-                    ? 'Strong rule: suggested result can be trusted'
-                    : 'Weak rule: requires human confirmation'}
+                    ? t('Strong rule — suggestion can be trusted', 'กฎแข็ง — เชื่อถือผลที่แนะนำได้')
+                    : t('Weak rule — needs your confirmation', 'กฎอ่อน — ต้องให้ผู้ตรวจยืนยัน')}
                 </span>
               </div>
-
-              <div className="field mt-[10px]">
-                <label className="field-label">PD source (confirmed by reviewer)</label>
-                <select
-                  value={c.confirmed_pd_source_type ?? ''}
-                  onChange={(e) => void changePdSource(e.target.value)}
-                >
+              <div className="field mt-3">
+                <label className="label" htmlFor="pd-source">
+                  {t('Confirmed PD source', 'แหล่ง PD ที่ยืนยัน')}
+                </label>
+                <select id="pd-source" value={c.confirmed_pd_source_type ?? ''} onChange={(e) => void changePdSource(e.target.value)}>
                   {(options?.pd_source_options ?? []).map((o) => (
                     <option key={o} value={o}>
                       {o}
@@ -639,489 +505,272 @@ function CaseWizardPage() {
                   ))}
                 </select>
               </div>
-            </div>
+            </section>
 
-            {/* ---- Decision criteria ---- */}
-            <div className="card mb-0">
-              <h2>
-                Decision Criteria{' '}
-                <span className="text-[11px] font-medium text-slate-400">read-only</span>
-              </h2>
-              <p className="hint">
-                The threshold applied to reach the Final Result above, and why. The rule is fixed
-                to the published method so every case is scored identically.
-              </p>
-
-              <div className="readout-grid mt-0">
-                <Readout
-                  label="Threshold applied"
-                  value={fmt(c.ai_threshold_percent, 0, '%')}
-                  valueClass="text-[15px]"
-                />
-                <Readout
-                  label="Classes over threshold"
-                  value={c.ai_high_conf_count ?? '-'}
-                  valueClass="text-[15px]"
-                />
-              </div>
-
-              <label className="field-label mb-[6px] mt-[10px] block">
-                Decision rule for this case
-              </label>
-              <div className="locked-banner mb-0">
-                <b className="text-slate-900">{decisionModeLabel}</b>
+            <Collapse title={t('Decision rule details', 'รายละเอียดกฎการตัดสิน')}>
+              <p className="mb-2">
+                <b>{decisionMode?.label ?? c.decision_mode}</b>
                 <br />
-                {decisionModeDescription}
-              </div>
-
-              {/* ---- Internal sanity check ---- */}
+                <span className="text-muted">{decisionMode?.description}</span>
+              </p>
               {c.sanity_check?.ran && (
-                <div
-                  className="locked-banner mt-[10px]"
-                  style={{
-                    background: c.sanity_check.passed ? '#ECFDF5' : '#FEF2F2',
-                    borderColor: c.sanity_check.passed ? '#A7F3D0' : '#FECACA',
-                    color: c.sanity_check.passed ? '#047857' : '#B91C1C',
-                  }}
-                >
-                  Internal Sanity Check (confidence 85-95%): quadrant ratio (upper{' '}
-                  {fmt((c.sanity_check.upper_ratio ?? 0) * 100, 0, '%')} / lower{' '}
-                  {fmt((c.sanity_check.lower_ratio ?? 0) * 100, 0, '%')} / left{' '}
-                  {fmt((c.sanity_check.left_ratio ?? 0) * 100, 0, '%')} / right{' '}
-                  {fmt((c.sanity_check.right_ratio ?? 0) * 100, 0, '%')}) →{' '}
+                <div className={`callout ${c.sanity_check.passed ? 'callout-green' : 'callout-red'}`}>
+                  {t('Internal sanity check (quadrant ratios)', 'ตรวจสอบ Internal (สัดส่วนจตุภาค)')}: {t('upper', 'บน')}{' '}
+                  {fmt((c.sanity_check.upper_ratio ?? 0) * 100, 0, '%')} · {t('lower', 'ล่าง')}{' '}
+                  {fmt((c.sanity_check.lower_ratio ?? 0) * 100, 0, '%')} · {t('left', 'ซ้าย')}{' '}
+                  {fmt((c.sanity_check.left_ratio ?? 0) * 100, 0, '%')} · {t('right', 'ขวา')}{' '}
+                  {fmt((c.sanity_check.right_ratio ?? 0) * 100, 0, '%')} →{' '}
                   <b>
                     {c.sanity_check.passed
-                      ? 'Passed: Internal result confirmed'
-                      : 'Failed: overridden to Non-identified, needs review'}
+                      ? t('passed', 'ผ่าน')
+                      : t('failed, overridden to Non-identified', 'ไม่ผ่าน เปลี่ยนเป็น Non-identified')}
                   </b>
                 </div>
               )}
-
-            </div>
+            </Collapse>
           </div>
         </div>
       )}
 
-      {/* ================= STEP 2: CALIBRATION ================= */}
+      {/* ================= STEP 2: PLOT AXES ================= */}
       {step === 'calibration' && (
-        <div className="card">
-          <h2>Plot Calibration</h2>
-          <p className="hint">
-            Drag all 4 frame lines (left / right / top / bottom) to fit the PRPD plot before
-            measuring gap-time. Coordinates are in the original image&apos;s pixel space.
-          </p>
-
-          {matchedPreset ? (
-            <div className="locked-banner border-brand-100 bg-brand-50 text-brand-600">
-              Found a calibration preset matching this image size ({c.image_width}×{c.image_height}
-              ): <b>{matchedPreset.preset_name}</b> (saved {fmtDate(matchedPreset.saved_time)}).{' '}
-              <span
-                className="small-link"
-                onClick={async () => {
-                  applyCase(await api.applyPreset(c.id, matchedPreset.id));
-                  toast('Preset applied');
-                }}
-              >
-                Apply
+        <div className="split">
+          <section className="card">
+            <div className="card-head">
+              <div>
+                <h2 className="card-title">{t('Fit the axes to the plot', 'ปรับแกนให้ตรงกับกราฟ')}</h2>
+                <p className="card-sub">
+                  {t(
+                    'Drag the blue lines onto 0° and 360°, and the orange lines onto the top and bottom of the plot.',
+                    'ลากเส้นสีน้ำเงินให้ตรง 0° และ 360° และเส้นสีส้มให้ตรงขอบบนและล่างของกราฟ',
+                  )}
+                </p>
+              </div>
+              <span className={`pill ${axesSaved === 'saving' ? 'pill-gray' : 'pill-green'}`}>
+                {axesSaved === 'saving' ? t('Saving…', 'กำลังบันทึก…') : t('Saved automatically', 'บันทึกอัตโนมัติ')}
               </span>
             </div>
-          ) : (
-            <div className="locked-banner border-red-200 bg-red-50 text-red-700">
-              No preset found matching this image size ({c.image_width}×{c.image_height}). Using
-              auto-detect or manual adjustment.
-            </div>
-          )}
+            <PrpdCanvas
+              imageUrl={prpdUrl}
+              imageWidth={c.image_width ?? 400}
+              imageHeight={c.image_height ?? 300}
+              frame={frame}
+              mode="calibration"
+              onDrag={onCalibDrag}
+              onDragEnd={onCalibDragEnd}
+            />
+            <NudgeRow
+              items={[
+                { label: '0°', handle: 'x_left' },
+                { label: '360°', handle: 'x_right' },
+                { label: t('Top', 'บน'), handle: 'y_top' },
+                { label: t('Bottom', 'ล่าง'), handle: 'y_bottom' },
+              ]}
+              onNudge={nudgeCalib}
+            />
+          </section>
 
-          <div className="row">
-            <div className="col min-w-[380px] flex-[2]">
-              <div className="mb-2 flex items-center justify-between flex-wrap gap-2">
-                <button
-                  type="button"
-                  className={`btn ${lockSpan ? 'primary' : 'btn-outline'} text-xs`}
-                  onClick={() => setLockSpan((v) => !v)}
-                  title={t('Adjust two lines simultaneously', 'ปรับสองเส้นพร้อมกัน')}
-                >
-                  ⟷ {t('Adjust Both Lines (Lock Span)', 'ปรับสองเส้นพร้อมกัน (Lock Span)')}:{' '}
-                  <b>{lockSpan ? t('ON', 'เปิด') : t('OFF', 'ปิด')}</b>
-                </button>
-                <span className="text-xs text-slate-500">
-                  {lockSpan
-                    ? t('Dragging 0° or 360° moves both lines together', 'ลากเส้น 0° หรือ 360° จะขยับทั้งสองเส้นพร้อมกัน')
-                    : t('Click toggle to move both lines together', 'กดเปิดเพื่อปรับสองเส้นพร้อมกัน')}
-                </span>
-              </div>
-              <PrpdCanvas
-                imageUrl={prpdUrl}
-                imageWidth={c.image_width ?? 400}
-                imageHeight={c.image_height ?? 300}
-                frame={frame}
-                mode="calibration"
-                lockSpan={lockSpan}
-                onDrag={onCalibDrag}
-                onDragEnd={onCalibDragEnd}
-                onDragFramePair={onDragFramePair}
-                onDragEndFramePair={onDragEndFramePair}
-                displayWidth={720}
-              />
-              <NudgeRow
-                items={[
-                  { label: '0° (L)', handle: 'x_left' },
-                  { label: '360° (R)', handle: 'x_right' },
-                  { label: 'Top', handle: 'y_top' },
-                  { label: 'Bottom', handle: 'y_bottom' },
-                ]}
-                onNudge={nudgeCalib}
-                onNudgePair={nudgePair}
-              />
-            </div>
-
-            <div className="col">
-              <div className="field">
-                <label className="field-label">Calibration source</label>
-                <div className="locked-banner mb-0">
-                  {c.calibration.calibration_source ?? '-'}
-                  <br />
-                  <span className="text-[11.5px] text-slate-400">
-                    auto-detect status: {c.calibration.auto_calibration_status ?? '-'}
-                  </span>
-                </div>
-              </div>
-
-              <div className="readout-grid">
-                {(
-                  [
-                    ['Left (0°), px', 'x_left'],
-                    ['Right (360°), px', 'x_right'],
-                    ['Top, px', 'y_top'],
-                    ['Bottom, px', 'y_bottom'],
-                  ] as const
-                ).map(([label, key]) => (
-                  <div className="readout-box" key={key}>
-                    <div className="lbl">{label}</div>
-                    <input
-                      type="number"
-                      value={frame[key]}
-                      className="w-full border-transparent bg-transparent px-[6px] py-[3px] text-[14px] font-bold"
-                      onChange={(e) =>
-                        setFrame((f) => (f ? { ...f, [key]: Number(e.target.value) } : f))
-                      }
-                      onBlur={() => void commitCalibration(frame)}
-                    />
-                  </div>
-                ))}
-                <Readout
-                  label="Plot width"
-                  value={`${frame.x_right - frame.x_left} px`}
-                  valueClass="text-[14px]"
-                />
-                <Readout
-                  label="Plot height"
-                  value={`${frame.y_bottom - frame.y_top} px`}
-                  valueClass="text-[14px]"
-                />
-              </div>
-
-              <div className="mt-[10px] flex flex-wrap gap-2">
-                <button
-                  className="btn btn-outline"
-                  type="button"
-                  onClick={async () => {
-                    applyCase(await api.autoDetectCalibration(c.id));
-                    toast('Re-ran auto-detect calibration');
-                  }}
-                >
-                  <RefreshIcon className="btn-icon" />
-                  Re-run auto-detect
-                </button>
-                <button className="btn btn-outline" type="button" onClick={() => void savePreset()}>
-                  <SaveIcon className="btn-icon" />
-                  Save Preset
-                </button>
-                <button
-                  className="btn btn-outline"
-                  type="button"
-                  title="Reset the frame to the default. Does not touch any saved preset."
-                  onClick={async () => {
-                    applyCase(await api.resetCalibration(c.id));
-                    toast('Calibration reset to default frame');
-                  }}
-                >
-                  Clear
-                </button>
-              </div>
-            </div>
-          </div>
+          <AxesPanel
+            pdCase={c}
+            frame={frame}
+            setFrame={setFrame}
+            commit={(f) => void commitCalibration(f)}
+            presets={presets}
+            inFolder={inFolder}
+            onApplied={(updated) => {
+              applyCase(updated);
+              setAxesSaved('saved');
+            }}
+            onPresetsChanged={() => void loadPresets()}
+            onCopied={() => api.listCases({ batch_id: c.batch_id ?? undefined }).then(setSiblings).catch(() => undefined)}
+          />
         </div>
       )}
 
       {/* ================= STEP 3: GAP-TIME ================= */}
       {step === 'gap' && (
-        <div className="card">
-          <h2>Gap-Time Detection</h2>
-          <p className="hint">
-            Drag the gap lines (yellow = left, green = right) to the edges of the signal clusters.
-            Gap-time, band and severity update as the lines move. The regression model only
-            suggests starting positions. The saved value always comes from the confirmed lines.
-          </p>
-
-          <div className="row">
-            <div className="col min-w-[380px] flex-[2]">
-              <div className="mb-2 flex flex-wrap gap-2">
-                <button
-                  className="btn btn-blue"
-                  type="button"
-                  onClick={() => void detectGap('rule')}
-                >
-                  <GearDetectIcon className="btn-icon" />
-                  Auto-detect (rule-based)
+        <div className="split">
+          <section className="card">
+            <div className="card-head">
+              <div>
+                <h2 className="card-title">{t('Measure the gap-time', 'วัด Gap-Time')}</h2>
+                <p className="card-sub">
+                  {t(
+                    'Place the lines on the facing edges of the two discharge clusters. The saved value always comes from these lines.',
+                    'วางเส้นที่ขอบด้านในของกลุ่มการคายประจุทั้งสอง ค่าที่บันทึกมาจากตำแหน่งเส้นนี้เสมอ',
+                  )}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button className="btn btn-secondary btn-sm" type="button" onClick={() => void detectGap('rule')}>
+                  <GearDetectIcon />
+                  {t('Detect (rule-based)', 'ตรวจจับ (ตามกฎ)')}
                 </button>
                 <button
-                  className="btn btn-outline"
+                  className="btn btn-secondary btn-sm"
                   type="button"
                   disabled={!gap.auto_gap_model_available}
-                  title={
-                    gap.auto_gap_model_available
-                      ? `Model: ${gap.auto_gap_model_version}`
-                      : 'Auto Gap-time model not loaded'
-                  }
+                  title={gap.auto_gap_model_available ? gap.auto_gap_model_version ?? '' : t('Gap-time model not loaded', 'ไม่ได้โหลดโมเดล Gap-Time')}
                   onClick={() => void detectGap('model')}
                 >
-                  <SparkleIcon className="btn-icon" />
-                  Auto-Suggest (Regression)
+                  <SparkleIcon />
+                  {t('Suggest (model)', 'แนะนำ (โมเดล)')}
                 </button>
-              </div>
-
-              <div className="mb-2 flex items-center justify-between flex-wrap gap-2">
-                <button
-                  type="button"
-                  className={`btn ${lockSpan ? 'primary' : 'btn-outline'} text-xs`}
-                  onClick={() => setLockSpan((v) => !v)}
-                  title={t('Adjust two lines simultaneously', 'ปรับสองเส้นพร้อมกัน')}
-                >
-                  ⟷ {t('Adjust Both Gap Lines (Lock Span)', 'ปรับสองเส้น Gap พร้อมกัน')}:{' '}
-                  <b>{lockSpan ? t('ON', 'เปิด') : t('OFF', 'ปิด')}</b>
-                </button>
-                <span className="text-xs text-slate-500">
-                  {t('Drag band between L and R, or toggle to lock span', 'ลากแถบสีระหว่างเส้น L และ R เพื่อเลื่อนทั้งสองเส้นพร้อมกัน')}
-                </span>
-              </div>
-              <PrpdCanvas
-                imageUrl={prpdUrl}
-                imageWidth={c.image_width ?? 400}
-                imageHeight={c.image_height ?? 300}
-                frame={frame}
-                mode="gap"
-                gapLeft={gapLines.left}
-                gapRight={gapLines.right}
-                lockSpan={lockSpan}
-                onDrag={onGapDrag}
-                onDragEnd={onGapDragEnd}
-                onDragPair={onDragPair}
-                onDragEndPair={onDragEndPair}
-                displayWidth={720}
-              />
-              <NudgeRow
-                items={[
-                  { label: 'Gap L', handle: 'gapLeft' },
-                  { label: 'Gap R', handle: 'gapRight' },
-                ]}
-                onNudge={nudgeGap}
-                onNudgePair={nudgePair}
-                disabled={gapLines.left == null}
-              />
-
-              <div className="mt-2">
-                {singleCluster ? (
-                  <>
-                    <span className="pill pill-red">Single discharge cluster</span>{' '}
-                    <span className="hint">
-                      Only one discharge cluster was detected ({gap.cluster_detection_status}).
-                      Gap-time is not measurable. Use the Not Measurable button on the Sign-off
-                      step.
-                    </span>
-                  </>
-                ) : gapLines.left != null ? (
-                  <>
-                    <span className="pill pill-green">
-                      {gap.gap_line_source === 'ai_auto'
-                        ? 'Detected (regression model)'
-                        : gap.gap_line_source === 'manual'
-                          ? 'Manual'
-                          : 'Detected (rule-based)'}
-                    </span>{' '}
-                    <span className="hint">
-                      {gap.detected_case ? `Cluster order: ${gap.detected_case}. ` : ''}
-                      {gap.manual_adjustment_detected
-                        ? 'Manually adjusted from the auto suggestion.'
-                        : ''}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <span className="pill pill-gray">Not detected</span>{' '}
-                    <span className="hint">
-                      Click Auto-detect or Auto-Suggest, or drag the lines by hand.
-                    </span>
-                  </>
-                )}
               </div>
             </div>
+            <PrpdCanvas
+              imageUrl={prpdUrl}
+              imageWidth={c.image_width ?? 400}
+              imageHeight={c.image_height ?? 300}
+              frame={frame}
+              mode="gap"
+              gapLeft={gapLines.left}
+              gapRight={gapLines.right}
+              onDrag={onGapDrag}
+              onDragEnd={onGapDragEnd}
+            />
+            <NudgeRow
+              items={[
+                { label: t('Left', 'ซ้าย'), handle: 'gapLeft' },
+                { label: t('Right', 'ขวา'), handle: 'gapRight' },
+              ]}
+              onNudge={nudgeGap}
+              disabled={gapLines.left == null}
+            />
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-[14px]">
+              {singleCluster ? (
+                <>
+                  <span className="pill pill-red">{t('Single discharge cluster', 'มีกลุ่มการคายประจุกลุ่มเดียว')}</span>
+                  <span className="text-muted">
+                    {t('Gap-time is not measurable. Choose Not measurable at sign-off.', 'วัด Gap-Time ไม่ได้ เลือก "วัดไม่ได้" ในขั้นยืนยันผล')}
+                  </span>
+                </>
+              ) : gapLines.left != null ? (
+                <>
+                  <span className="pill pill-green">
+                    {gap.gap_line_source === 'ai_auto'
+                      ? t('From the regression model', 'จากโมเดล Regression')
+                      : gap.gap_line_source === 'manual'
+                        ? t('Placed by hand', 'ปรับด้วยมือ')
+                        : t('From rule-based detection', 'จากการตรวจจับตามกฎ')}
+                  </span>
+                  {gap.manual_adjustment_detected && (
+                    <span className="text-muted">{t('Adjusted from the suggestion.', 'ปรับจากค่าที่แนะนำแล้ว')}</span>
+                  )}
+                </>
+              ) : (
+                <>
+                  <span className="pill pill-gray">{t('No lines yet', 'ยังไม่มีเส้น')}</span>
+                  <span className="text-muted">{t('Use Detect or Suggest above.', 'กดตรวจจับหรือแนะนำด้านบน')}</span>
+                </>
+              )}
+            </div>
+          </section>
 
-            <div className="col">
+          <div className="stack">
+            <section className="card">
+              <h2 className="card-title mb-3">{t('Measurement', 'ค่าที่วัดได้')}</h2>
               <div className="readout-grid">
-                <Readout label="Gap angle" value={fmt(gap.gap_angle_deg, 4, '°')} />
-                <Readout label="Gap time" value={fmt(gap.gap_time_ms, 4, ' ms')} />
+                <Readout label={t('Gap angle', 'มุม Gap')} value={fmt(gap.gap_angle_deg, 2, '°')} />
+                <Readout label="Gap-Time" value={fmt(gap.gap_time_ms, 3, ' ms')} />
+                <Readout label={t('Band', 'ช่วง')} value={gap.gap_time_band ?? '-'} text />
                 <Readout
-                  label="Band"
-                  value={gap.gap_time_band ?? '-'}
-                  valueClass="text-[12.5px]"
-                />
-                <Readout
-                  label="Severity"
-                  value={
-                    <span className={`pill ${severityPillClass(c.severity_by_gap_time)}`}>
-                      {c.severity_by_gap_time ?? '-'}
-                    </span>
-                  }
-                />
-                <Readout
-                  label="Left / Right px"
-                  value={`${fmt(gap.left_line_pixel, 0)} / ${fmt(gap.right_line_pixel, 0)}`}
-                  valueClass="text-[13px]"
-                />
-                <Readout
-                  label="Left / Right °"
-                  value={`${fmt(gap.left_phase_deg, 1)} / ${fmt(gap.right_phase_deg, 1)}`}
-                  valueClass="text-[13px]"
+                  label={t('Severity', 'ความรุนแรง')}
+                  value={<span className={`pill ${severityPillClass(c.severity_by_gap_time)}`}>{c.severity_by_gap_time ?? '-'}</span>}
+                  text
                 />
               </div>
-
-              <div className="mt-4 border-t border-slate-100 pt-[14px]">
-                <label className="field-label mb-2">Severity combination</label>
-                <SeverityMatrix pdCase={c} />
-                <div className="callout callout-amber mt-[12px]">
-                  <b>Initial / Moderate / High are this framework&apos;s criteria, not an
-                  international standard.</b>{' '}
-                  A gap time under 4 ms does not by itself prove a defect is severe, and one over
-                  7 ms does not prove it is safe. If the two clusters are not clearly separated,
-                  record the case as Not Measurable instead of accepting the computed band.
-                </div>
-              </div>
-            </div>
+            </section>
+            <section className="card">
+              <h2 className="card-title mb-3">{t('How severity is decided', 'วิธีกำหนดความรุนแรง')}</h2>
+              <SeverityMatrix pdCase={c} />
+              <p className="callout callout-amber mt-3 text-[13.5px]">
+                {t(
+                  'Initial / Moderate / High are this framework’s criteria, not an international standard. If the clusters are not clearly separated, record the case as Not measurable.',
+                  'Initial / Moderate / High เป็นเกณฑ์ของระบบนี้ ไม่ใช่มาตรฐานสากล หากแยกกลุ่มไม่ชัดให้บันทึกเป็น "วัดไม่ได้"',
+                )}
+              </p>
+            </section>
           </div>
         </div>
       )}
 
       {/* ================= STEP 4: SUMMARY ================= */}
       {step === 'summary' && (
-        <div className="card">
-          <h2>Case Summary</h2>
-          <p className="hint">
-            A single combined chart summarising this case, with a full data table covering every
-            step.
-          </p>
-          <div className="row">
-            <div className="col flex-none">
-              <SummaryChart pdCase={c} imageUrl={prpdUrl} />
-              <div className="mt-[10px] flex gap-2">
-                <button
-                  className="btn btn-outline"
-                  type="button"
-                  onClick={() => downloadSummaryImage(c.case_base_name)}
-                >
-                  <DownloadIcon className="btn-icon" />
-                  Download summary image (.png)
+        <div className="split">
+          <section className="card">
+            <div className="card-head">
+              <h2 className="card-title">{t('Case summary', 'สรุปเคส')}</h2>
+              <div className="flex flex-wrap gap-2">
+                <button className="btn btn-secondary btn-sm" type="button" onClick={() => downloadSummaryImage(c.case_base_name)}>
+                  <DownloadIcon />
+                  {t('Summary image (.png)', 'ภาพสรุป (.png)')}
                 </button>
                 {c.annotated_image_url && (
-                  <a
-                    className="btn btn-outline"
-                    href={fileUrl(c.annotated_image_url) ?? '#'}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <DownloadIcon className="btn-icon" />
-                    Annotated gap-time image
+                  <a className="btn btn-secondary btn-sm" href={fileUrl(c.annotated_image_url) ?? '#'} target="_blank" rel="noreferrer">
+                    <DownloadIcon />
+                    {t('Annotated image', 'ภาพพร้อมเส้น Gap')}
                   </a>
                 )}
               </div>
             </div>
+            <SummaryChart pdCase={c} imageUrl={prpdUrl} />
+          </section>
 
-            <div className="col">
+          <div className="stack">
+            <section className="card">
               <div className="readout-grid">
+                <Readout label={t('AI result', 'ผล AI')} value={c.ai_final_result ?? '-'} text />
+                <Readout label={t('Confirmed PD source', 'แหล่ง PD ที่ยืนยัน')} value={c.confirmed_pd_source_type ?? '-'} text />
+                <Readout label="Gap-Time" value={`${fmt(gap.gap_time_ms, 3)} ms`} />
                 <Readout
-                  label="Final Result"
-                  value={c.ai_final_result ?? '-'}
-                  valueClass="text-[15px]"
-                />
-                <Readout
-                  label="Confirmed PD Source"
-                  value={c.confirmed_pd_source_type ?? '-'}
-                  valueClass="text-[13px]"
-                />
-                <Readout
-                  label="Gap time / band"
-                  value={`${fmt(gap.gap_time_ms, 4)} ms (${gap.gap_time_band ?? '-'})`}
-                  valueClass="text-[13px]"
-                />
-                <Readout label="Severity" value={c.severity_by_gap_time ?? '-'} />
-                <Readout
-                  label="Review status"
-                  value={c.review_status}
-                  valueClass="text-[13px]"
-                />
-                <Readout
-                  label="Reviewer"
-                  value={c.reviewer_name ?? '-'}
-                  valueClass="text-[13px]"
+                  label={t('Severity', 'ความรุนแรง')}
+                  value={<span className={`pill ${severityPillClass(c.severity_by_gap_time)}`}>{c.severity_by_gap_time ?? '-'}</span>}
+                  text
                 />
               </div>
-
-              <div className="scroll-table-wrap mt-[14px]">
-                <FullSummaryTable pdCase={c} />
-              </div>
-            </div>
+            </section>
+            <FullSummary pdCase={c} />
           </div>
         </div>
       )}
 
       {/* ================= STEP 5: SIGN-OFF ================= */}
       {step === 'signoff' && (
-        <div className="card">
-          <h2>Reviewer &amp; Sign-off</h2>
-          <p className="hint">
-            Signed in as the reviewer of record below. Complete the review status and save once
-            Classification, PD Source, Calibration, Gap-Time and Summary have been checked.
-          </p>
+        <section className="card">
+          <div className="card-head">
+            <div>
+              <h2 className="card-title">{t('Reviewer sign-off', 'ผู้ตรวจยืนยันผล')}</h2>
+              <p className="card-sub">
+                {t(
+                  'Saving records you as the reviewer of this case.',
+                  'เมื่อบันทึก ระบบจะบันทึกคุณเป็นผู้ตรวจของเคสนี้',
+                )}
+              </p>
+            </div>
+            <div className="text-right text-[14px]">
+              <b>{user?.username}</b> <span className="capitalize text-muted">({user?.role})</span>
+            </div>
+          </div>
 
-          <div className="row">
-            <div className="col">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
               <div className="field">
-                <label className="field-label">Reviewer</label>
-                <div className="locked-banner mb-0">
-                  <b>{user?.username}</b>{' '}
-                  <span className="capitalize text-slate-500">({user?.role})</span>
-                </div>
-              </div>
-
-              <div className="field">
-                <label className="field-label">Review status</label>
-                <select
-                  value={reviewStatus}
-                  onChange={(e) => setReviewStatus(e.target.value as ReviewStatus)}
-                >
-                  <option value="user_confirmed">Confirmed as-is</option>
-                  <option value="expert_corrected">Corrected by expert</option>
-                  <option value="not_measurable">Not measurable</option>
+                <label className="label" htmlFor="review-status">
+                  {t('Review status', 'สถานะการตรวจ')}
+                </label>
+                <select id="review-status" value={reviewStatus} onChange={(e) => setReviewStatus(e.target.value as ReviewStatus)}>
+                  <option value="user_confirmed">{t('Confirmed as suggested', 'ยืนยันตามที่ระบบเสนอ')}</option>
+                  <option value="expert_corrected">{t('Corrected by an expert', 'แก้ไขโดยผู้เชี่ยวชาญ')}</option>
+                  <option value="not_measurable">{t('Not measurable', 'วัดไม่ได้')}</option>
                 </select>
               </div>
-
               {reviewStatus === 'not_measurable' && (
                 <div className="field">
-                  <label className="field-label">Reason not measurable</label>
-                  <select
-                    value={notMeasurableReason}
-                    onChange={(e) => setNotMeasurableReason(e.target.value)}
-                  >
+                  <label className="label" htmlFor="nm-reason">
+                    {t('Why it is not measurable', 'เหตุผลที่วัดไม่ได้')}
+                  </label>
+                  <select id="nm-reason" value={notMeasurableReason} onChange={(e) => setNotMeasurableReason(e.target.value)}>
                     {(options?.not_measurable_reasons ?? []).map((r) => (
                       <option key={r} value={r}>
                         {r.replace(/_/g, ' ')}
@@ -1131,39 +780,35 @@ function CaseWizardPage() {
                 </div>
               )}
             </div>
-
-            <div className="col">
-              <div className="field">
-                <label className="field-label">Review note</label>
-                <textarea
-                  value={reviewNote}
-                  placeholder="Additional notes (optional)"
-                  className="min-h-[110px]"
-                  onChange={(e) => setReviewNote(e.target.value)}
-                />
-              </div>
+            <div className="field">
+              <label className="label" htmlFor="review-note">
+                {t('Note', 'หมายเหตุ')} <span className="tag">{t('optional', 'ไม่บังคับ')}</span>
+              </label>
+              <textarea
+                id="review-note"
+                value={reviewNote}
+                placeholder={t('Anything the next reader should know', 'ข้อมูลที่ผู้อ่านต่อควรรู้')}
+                onChange={(e) => setReviewNote(e.target.value)}
+              />
             </div>
           </div>
 
           {singleCluster && reviewStatus !== 'not_measurable' && (
-            <div className="locked-banner border-amber-200 bg-amber-50 text-amber-700">
-              The detector found only one discharge cluster, so gap-time cannot be measured.
-              Saving with a measurable status will be rejected. Use <b>Not Measurable</b>.
+            <div className="callout callout-amber mt-3">
+              {t(
+                'Only one discharge cluster was found, so a measurable status will be rejected. Choose Not measurable.',
+                'พบกลุ่มการคายประจุเพียงกลุ่มเดียว สถานะที่วัดได้จะถูกปฏิเสธ กรุณาเลือก "วัดไม่ได้"',
+              )}
             </div>
           )}
 
-          <div className="flex flex-wrap gap-[10px]">
-            <button
-              className="btn btn-green"
-              type="button"
-              disabled={saving}
-              onClick={() => void submitReview()}
-            >
-              <CheckIcon className="btn-icon" />
-              Accept and Save
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <button className="btn btn-success" type="button" disabled={saving} onClick={() => void submitReview()}>
+              <CheckIcon />
+              {t('Save review', 'บันทึกผลตรวจ')}
             </button>
             <button
-              className="btn btn-red"
+              className="btn btn-danger"
               type="button"
               disabled={saving}
               onClick={() => {
@@ -1171,250 +816,434 @@ function CaseWizardPage() {
                 void submitReview('not_measurable');
               }}
             >
-              <XIcon className="btn-icon" />
-              Not Measurable
+              <XIcon />
+              {t('Save as not measurable', 'บันทึกว่าวัดไม่ได้')}
             </button>
-
             {queueTotal > 1 && (
               <button
-                className="btn btn-blue ml-auto"
+                className="btn btn-primary ml-auto"
                 type="button"
                 disabled={saving || advanceBlocked}
-                title={
-                  advanceBlocked
-                    ? 'Gap-time is not measurable for this case. Use Not Measurable first'
-                    : nextPending
-                      ? `${alreadySaved ? 'Open' : 'Save, then open'} ${nextPending.case_base_name}`
-                      : 'Finish here and return to the queue'
-                }
                 onClick={() => void saveAndAdvance()}
               >
-                {alreadySaved ? '' : 'Save and '}
-                {nextPending ? 'Next Case →' : 'Finish Queue →'}
+                {alreadySaved ? '' : t('Save and ', 'บันทึกแล้ว')}
+                {nextPending ? t('next case', 'ไปเคสถัดไป') : t('finish folder', 'จบโฟลเดอร์')}
+                <ArrowRightIcon />
               </button>
             )}
           </div>
-
           {queueTotal > 1 && (
-            <p className="hint mb-0 mt-[10px]">
-              {advanceBlocked ? (
-                <>
-                  Mark this case <b>Not Measurable</b> to sign it off, then continue to the next
-                  one.
-                </>
-              ) : nextPending ? (
-                <>
-                  {queueTotal - queueDone} case{queueTotal - queueDone === 1 ? '' : 's'} left to
-                  review in this queue · next up <b>{nextPending.case_base_name}</b>
-                </>
-              ) : (
-                <>Every other case in this queue is reviewed.</>
-              )}
+            <p className="hint mt-2 text-[13.5px]">
+              {nextPending
+                ? t(
+                    `${queueTotal - queueDone} case(s) left · next: ${nextPending.case_base_name}`,
+                    `เหลือ ${queueTotal - queueDone} เคส · ถัดไป: ${nextPending.case_base_name}`,
+                  )
+                : t('Every other case in this folder is reviewed.', 'เคสอื่นในโฟลเดอร์นี้ตรวจครบแล้ว')}
             </p>
           )}
-        </div>
+        </section>
       )}
 
-      <div className="wizard-footer">
+      <div className="step-footer">
         <button
-          className="btn btn-outline"
+          className="btn btn-secondary"
           type="button"
           style={{ visibility: stepIndex === 0 ? 'hidden' : 'visible' }}
-          onClick={() => setStep(STEPS[stepIndex - 1].key)}
+          onClick={() => setStep(STEP_KEYS[stepIndex - 1])}
         >
-          ← Back
+          <ArrowLeftIcon />
+          {t('Back', 'ย้อนกลับ')}
         </button>
         <button
-          className="btn btn-blue"
+          className="btn btn-primary"
           type="button"
-          style={{ visibility: stepIndex === STEPS.length - 1 ? 'hidden' : 'visible' }}
-          onClick={() => setStep(STEPS[stepIndex + 1].key)}
+          style={{ visibility: stepIndex === STEP_KEYS.length - 1 ? 'hidden' : 'visible' }}
+          onClick={() => setStep(STEP_KEYS[stepIndex + 1])}
         >
-          Next →
+          {t('Next', 'ถัดไป')}: {stepIndex < STEP_KEYS.length - 1 ? stepLabels[STEP_KEYS[stepIndex + 1]] : ''}
+          <ArrowRightIcon />
         </button>
       </div>
     </>
   );
 }
 
-/** Full PD-source-group × gap-time-band matrix, so severity is explainable. */
+/**
+ * Everything about the axes in one place: the values (auto-saved to this
+ * case), saved presets to load or create, and copying to the rest of the
+ * folder.
+ */
+function AxesPanel({
+  pdCase: c,
+  frame,
+  setFrame,
+  commit,
+  presets,
+  inFolder,
+  onApplied,
+  onPresetsChanged,
+  onCopied,
+}: {
+  pdCase: PdCase;
+  frame: Frame;
+  setFrame: (f: Frame) => void;
+  commit: (f: Frame) => void;
+  presets: CalibrationPreset[];
+  inFolder: boolean;
+  onApplied: (c: PdCase) => void;
+  onPresetsChanged: () => void;
+  onCopied: () => void;
+}) {
+  const { toast } = useApp();
+  const { t, locale } = useI18n();
+  const matching = presets.filter((p) => p.image_width === c.image_width && p.image_height === c.image_height);
+  const others = presets.filter((p) => !matching.includes(p));
+  const [presetId, setPresetId] = useState<string>(matching[0] ? String(matching[0].id) : '');
+  const [presetName, setPresetName] = useState(`${c.image_width}x${c.image_height} ${new Date().toLocaleDateString(locale)}`);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!presetId && matching[0]) setPresetId(String(matching[0].id));
+  }, [matching, presetId]);
+
+  async function run(action: () => Promise<void>) {
+    setBusy(true);
+    try {
+      await action();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : t('That did not work', 'ดำเนินการไม่สำเร็จ'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const fields: [keyof Frame, string][] = [
+    ['x_left', t('0° (left), px', '0° (ซ้าย), px')],
+    ['x_right', t('360° (right), px', '360° (ขวา), px')],
+    ['y_top', t('Top, px', 'บน, px')],
+    ['y_bottom', t('Bottom, px', 'ล่าง, px')],
+  ];
+
+  const selected = presets.find((p) => String(p.id) === presetId);
+  const sizeMismatch = selected && (selected.image_width !== c.image_width || selected.image_height !== c.image_height);
+
+  return (
+    <div className="stack">
+      <section className="card">
+        <h2 className="card-title mb-3">{t('Axis values', 'ค่าแกน')}</h2>
+        <div className="readout-grid !grid-cols-2">
+          {fields.map(([key, label]) => (
+            <label className="readout" key={key}>
+              <span className="lbl">{label}</span>
+              <input
+                type="number"
+                value={frame[key]}
+                onChange={(e) => setFrame({ ...frame, [key]: Number(e.target.value) })}
+                onBlur={() => commit(frame)}
+                onKeyDown={(e) => e.key === 'Enter' && commit(frame)}
+              />
+            </label>
+          ))}
+        </div>
+        <p className="hint mt-2 text-[13px]">
+          {t('Image', 'ภาพ')} {c.image_width}×{c.image_height} px · {t('source', 'ที่มา')}: {c.calibration.calibration_source ?? '-'}
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            className="btn btn-secondary btn-sm"
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                onApplied(await api.autoDetectCalibration(c.id));
+                toast(t('Axes detected from the image', 'ตรวจจับแกนจากภาพแล้ว'));
+              })
+            }
+          >
+            <RefreshIcon />
+            {t('Auto-detect', 'ตรวจจับอัตโนมัติ')}
+          </button>
+          <button
+            className="btn btn-secondary btn-sm"
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                onApplied(await api.resetCalibration(c.id));
+                toast(t('Axes reset to the default frame', 'รีเซ็ตแกนเป็นค่าเริ่มต้นแล้ว'));
+              })
+            }
+          >
+            {t('Reset', 'รีเซ็ต')}
+          </button>
+        </div>
+      </section>
+
+      <section className="card">
+        <h2 className="card-title mb-1">{t('Saved axis presets', 'ค่าแกนที่บันทึกไว้')}</h2>
+        <p className="card-sub mb-3">
+          {t('Presets load automatically for new images of the same size.', 'ค่าที่บันทึกจะถูกใช้อัตโนมัติกับภาพใหม่ที่มีขนาดเท่ากัน')}
+        </p>
+        <div className="input-row">
+          <select value={presetId} onChange={(e) => setPresetId(e.target.value)} aria-label={t('Preset', 'ค่าแกน')}>
+            <option value="">{presets.length ? t('Choose a preset…', 'เลือกค่าแกน…') : t('No presets saved yet', 'ยังไม่มีค่าที่บันทึก')}</option>
+            {matching.length > 0 && (
+              <optgroup label={t('Same image size', 'ขนาดภาพเท่ากัน')}>
+                {matching.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.preset_name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {others.length > 0 && (
+              <optgroup label={t('Other sizes', 'ขนาดอื่น')}>
+                {others.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.preset_name} ({p.image_width}×{p.image_height})
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+          <button
+            className="btn btn-secondary"
+            type="button"
+            disabled={busy || !selected}
+            onClick={() =>
+              selected &&
+              void run(async () => {
+                onApplied(await api.applyPreset(c.id, selected.id));
+                toast(t(`Loaded "${selected.preset_name}"`, `ใช้ "${selected.preset_name}" แล้ว`));
+              })
+            }
+          >
+            {t('Load', 'ใช้ค่านี้')}
+          </button>
+        </div>
+        {sizeMismatch && (
+          <p className="field-error">{t('This preset was saved for a different image size.', 'ค่านี้บันทึกไว้สำหรับภาพขนาดอื่น')}</p>
+        )}
+
+        <label className="label mt-4" htmlFor="preset-name">
+          {t('Save the current axes as a preset', 'บันทึกแกนปัจจุบันเป็นค่าที่บันทึกไว้')}
+        </label>
+        <div className="input-row">
+          <input id="preset-name" type="text" value={presetName} onChange={(e) => setPresetName(e.target.value)} />
+          <button
+            className="btn btn-secondary"
+            type="button"
+            disabled={busy || !presetName.trim()}
+            onClick={() =>
+              void run(async () => {
+                const saved = await api.createPreset({
+                  preset_name: presetName.trim(),
+                  image_width: c.image_width ?? 0,
+                  image_height: c.image_height ?? 0,
+                  x_left_0deg: frame.x_left,
+                  x_right_360deg: frame.x_right,
+                  y_top_plot: frame.y_top,
+                  y_bottom_plot: frame.y_bottom,
+                  example_prpd_filename: c.prpd_filename,
+                  example_tf_filename: c.tf_filename,
+                  remark: `Saved from ${c.case_base_name}`,
+                });
+                setPresetId(String(saved.id));
+                onPresetsChanged();
+                toast(t(`Saved preset "${saved.preset_name}"`, `บันทึก "${saved.preset_name}" แล้ว`));
+              })
+            }
+          >
+            <SaveIcon />
+            {t('Save', 'บันทึก')}
+          </button>
+        </div>
+        <p className="field-help">{t('Using an existing name updates that preset.', 'ถ้าใช้ชื่อเดิม ระบบจะอัปเดตค่านั้น')}</p>
+      </section>
+
+      {inFolder && (
+        <section className="card">
+          <h2 className="card-title mb-1">{t('Rest of this folder', 'เคสที่เหลือในโฟลเดอร์')}</h2>
+          <p className="card-sub mb-3">
+            {t(
+              'Copy these axes to every case in the folder that has the same image size and is not signed off yet.',
+              'คัดลอกแกนนี้ไปยังทุกเคสในโฟลเดอร์ที่ภาพขนาดเท่ากันและยังไม่ได้ยืนยันผล',
+            )}
+          </p>
+          <button
+            className="btn btn-primary"
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                const r = await api.applyCalibrationToBatch(c.id);
+                onCopied();
+                toast(
+                  t(
+                    `Axes copied to ${r.updated} case(s)` +
+                      (r.skipped_size ? ` · ${r.skipped_size} skipped (other size)` : '') +
+                      (r.skipped_done ? ` · ${r.skipped_done} already signed off` : ''),
+                    `คัดลอกแกนไป ${r.updated} เคส` +
+                      (r.skipped_size ? ` · ข้าม ${r.skipped_size} (ขนาดต่างกัน)` : '') +
+                      (r.skipped_done ? ` · ${r.skipped_done} ยืนยันแล้ว` : ''),
+                  ),
+                );
+              })
+            }
+          >
+            <CopyIcon />
+            {t('Copy axes to the rest of this folder', 'คัดลอกแกนไปยังเคสที่เหลือในโฟลเดอร์นี้')}
+          </button>
+        </section>
+      )}
+    </div>
+  );
+}
+
+/** The PD-source-group × gap-time-band table, so severity is explainable. */
 function SeverityMatrix({ pdCase }: { pdCase: PdCase }) {
   const { options } = useApp();
+  const { t } = useI18n();
   const group1 = ['Floating / Corona / Bad contact', 'Outside surface discharge'];
   const group2 = ['Terminations / Joint', 'Internal'];
   const source = pdCase.confirmed_pd_source_type ?? '';
 
-  // Bands follow the account's own thresholds, so the table always explains
-  // the severity this case was actually given.
   const high = options?.constants.gap_time_high_ms ?? 4;
   const mod = options?.constants.gap_time_moderate_ms ?? 7;
   const cycle = options?.constants.cycle_time_ms ?? 20;
   const deg = (ms: number) => Math.round((ms * 360) / cycle);
 
-  const rows: [string, string, string][] = group1.includes(source)
+  const isGroup1 = group1.includes(source) || pdCase.severity_group?.includes('1');
+  const isGroup2 = group2.includes(source) || pdCase.severity_group?.includes('2');
+
+  const rows: [string, string, string][] = isGroup1
     ? [
         [`> ${mod} ms`, `> ${deg(mod)}°`, 'Initial'],
-        [`${high}-${mod} ms`, `${deg(high)}° - ${deg(mod)}°`, 'Moderate'],
+        [`${high}–${mod} ms`, `${deg(high)}°–${deg(mod)}°`, 'Moderate'],
         [`< ${high} ms`, `< ${deg(high)}°`, 'High'],
       ]
-    : group2.includes(source)
+    : isGroup2
       ? [
           [`> ${mod} ms`, `> ${deg(mod)}°`, 'Moderate'],
-          [`${high}-${mod} ms`, `${deg(high)}° - ${deg(mod)}°`, 'High'],
+          [`${high}–${mod} ms`, `${deg(high)}°–${deg(mod)}°`, 'High'],
           [`< ${high} ms`, `< ${deg(high)}°`, 'High'],
         ]
       : [];
 
   return (
     <>
-      <div className="readout-grid mt-0">
-        <Readout
-          label="PD source group"
-          value={pdCase.severity_group}
-          valueClass="text-[13px]"
-        />
-        <Readout label="Measured gap time" value={fmt(pdCase.gap.gap_time_ms, 4, ' ms')} />
-        <Readout label="Measured gap angle" value={fmt(pdCase.gap.gap_angle_deg, 4, '°')} />
-        <Readout
-          label="Resulting severity"
-          value={
-            <span className={`pill ${severityPillClass(pdCase.severity_by_gap_time)}`}>
-              {pdCase.severity_by_gap_time ?? '-'}
-            </span>
-          }
-        />
-      </div>
-
+      <p className="mb-2 text-[14px]">
+        {t('PD source group', 'กลุ่มแหล่ง PD')}: <b>{pdCase.severity_group || '-'}</b>
+      </p>
       {rows.length > 0 ? (
-        <table className="data mt-3">
+        <table className="data compact">
           <thead>
             <tr>
-              <th>Gap time</th>
-              <th>Gap angle</th>
-              <th>Severity</th>
+              <th>Gap-Time</th>
+              <th>{t('Gap angle', 'มุม Gap')}</th>
+              <th>{t('Severity', 'ความรุนแรง')}</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map(([band, deg, sev]) => (
-              <tr
-                key={band}
-                style={{
-                  background: pdCase.gap.gap_time_band === band ? 'var(--slate-50)' : undefined,
-                }}
-              >
-                <td>{band}</td>
-                <td>{deg}</td>
-                <td>
-                  <span className={`pill ${severityPillClass(sev)}`}>{sev}</span>
-                </td>
-              </tr>
-            ))}
+            {rows.map(([band, angle, sev]) => {
+              const current = pdCase.severity_by_gap_time === sev && (pdCase.gap.gap_time_band ?? '').replace('-', '–') === band;
+              return (
+                <tr key={band} style={current ? { background: 'var(--primary-soft)' } : undefined}>
+                  <td className="num">{band}</td>
+                  <td className="num">{angle}</td>
+                  <td>
+                    <span className={`pill ${severityPillClass(sev)}`}>{sev}</span>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       ) : (
-        <p className="hint mt-[10px]">
-          Confirm a PD source above to see the applicable severity table.
-        </p>
+        <p className="hint">{t('Confirm a PD source to see its severity table.', 'ยืนยันแหล่ง PD เพื่อดูตารางความรุนแรง')}</p>
       )}
     </>
   );
 }
 
-function FullSummaryTable({ pdCase: c }: { pdCase: PdCase }) {
-  const groupHead = (label: string) => (
-    <tr>
-      <td
-        colSpan={2}
-        className="border-b-2 border-slate-200 bg-slate-50 font-bold text-slate-700"
-      >
-        {label}
-      </td>
-    </tr>
-  );
+/** The full record, folded by section so only what is needed is open. */
+function FullSummary({ pdCase: c }: { pdCase: PdCase }) {
+  const { t, locale } = useI18n();
 
-  const kv = (rows: [string, React.ReactNode][]) =>
-    rows.map(([k, v]) => (
-      <tr key={k}>
-        <td className="k">{k}</td>
-        <td>{v}</td>
-      </tr>
-    ));
+  const groups: [string, [string, ReactNode][]][] = [
+    [
+      t('Case information', 'ข้อมูลเคส'),
+      [
+        [t('Case', 'เคส'), c.case_base_name],
+        [t('PRPD file', 'ไฟล์ PRPD'), c.prpd_filename ?? '-'],
+        [t('TF map file', 'ไฟล์ TF Map'), c.tf_filename ?? '-'],
+        [t('Model', 'โมเดล'), c.n_files === 2 ? 'Hybrid' : 'PRPD-only'],
+        [t('Image size', 'ขนาดภาพ'), `${c.image_width}×${c.image_height}`],
+        [t('Updated', 'แก้ไขล่าสุด'), fmtDate(c.updated_time, locale)],
+      ],
+    ],
+    [
+      t('Classification', 'การจำแนก'),
+      [
+        ['Corona / Surface / Internal', `${fmt(c.confidence.corona)} / ${fmt(c.confidence.surface)} / ${fmt(c.confidence.internal)} %`],
+        [t('Top class', 'คลาสสูงสุด'), `${c.ai_top_class ?? '-'} (${fmt(c.ai_top_score_percent)}%)`],
+        [t('Final result', 'ผลสุดท้าย'), c.ai_final_result ?? '-'],
+        [t('Status', 'สถานะ'), c.ai_status ?? '-'],
+        [t('Decision rule', 'กฎการตัดสิน'), c.ai_decision_rule ?? '-'],
+        [t('Threshold', 'เกณฑ์'), fmt(c.ai_threshold_percent, 0, '%')],
+      ],
+    ],
+    [
+      t('Plot axes', 'แกนกราฟ'),
+      [
+        [
+          t('Frame L / R / T / B', 'กรอบ ซ้าย/ขวา/บน/ล่าง'),
+          `${c.calibration.x_left_0deg} / ${c.calibration.x_right_360deg} / ${c.calibration.y_top_plot} / ${c.calibration.y_bottom_plot}`,
+        ],
+        [t('Mode', 'โหมด'), c.calibration.calibration_mode ?? '-'],
+        [t('Source', 'ที่มา'), c.calibration.calibration_source ?? '-'],
+        [t('Preset loaded', 'ใช้ค่าที่บันทึก'), c.calibration.calibration_preset_loaded ? t('Yes', 'ใช่') : t('No', 'ไม่')],
+      ],
+    ],
+    [
+      t('Gap-time & severity', 'Gap-Time และความรุนแรง'),
+      [
+        [t('Gap angle', 'มุม Gap'), fmt(c.gap.gap_angle_deg, 4, '°')],
+        ['Gap-Time', fmt(c.gap.gap_time_ms, 4, ' ms')],
+        [t('Band', 'ช่วง'), c.gap.gap_time_band ?? '-'],
+        [t('Lines', 'เส้น'), `${c.gap.gap_line_source ?? '-'} / ${c.gap.gap_measurement_status ?? '-'}`],
+        [t('Cluster detection', 'การตรวจจับกลุ่ม'), c.gap.cluster_detection_status ?? '-'],
+        [t('Severity', 'ความรุนแรง'), c.severity_by_gap_time ?? '-'],
+      ],
+    ],
+    [
+      t('PD source & review', 'แหล่ง PD และการตรวจ'),
+      [
+        [t('Suggested', 'ที่แนะนำ'), c.suggested_pd_source_type ?? '-'],
+        [t('Confirmed', 'ที่ยืนยัน'), c.confirmed_pd_source_type ?? '-'],
+        [t('Rule', 'กฎ'), c.pd_selection_rule ?? '-'],
+        [t('Reviewer', 'ผู้ตรวจ'), `${c.reviewer_name ?? '-'} (${c.reviewer_role ?? '-'})`],
+        [t('Review status', 'สถานะการตรวจ'), c.review_status],
+        [t('Note', 'หมายเหตุ'), c.review_note || '-'],
+      ],
+    ],
+  ];
 
   return (
-    <table className="kv">
-      <tbody>
-        {groupHead('Case Info')}
-        {kv([
-          ['Case', c.case_base_name],
-          ['PRPD file', c.prpd_filename ?? '-'],
-          ['TF file', c.tf_filename ?? '-'],
-          ['Inference mode', c.n_files === 2 ? 'Hybrid' : 'PRPD-only'],
-          ['Image size', `${c.image_width}×${c.image_height}`],
-          ['Updated', fmtDate(c.updated_time)],
-        ])}
-
-        {groupHead('Classification Result')}
-        {kv([
-          [
-            'Corona / Surface / Internal',
-            `${fmt(c.confidence.corona)}% / ${fmt(c.confidence.surface)}% / ${fmt(
-              c.confidence.internal,
-            )}%`,
-          ],
-          ['Top class', `${c.ai_top_class ?? '-'} (${fmt(c.ai_top_score_percent)}%)`],
-          ['Final result', c.ai_final_result ?? '-'],
-          ['Status', c.ai_status ?? '-'],
-          ['Decision rule', c.ai_decision_rule ?? '-'],
-          ['Threshold', fmt(c.ai_threshold_percent, 0, '%')],
-          ['Non-identified score', fmt(c.ai_non_identified_percent, 1, '%')],
-        ])}
-
-        {groupHead('Calibration')}
-        {kv([
-          [
-            'Frame (L / R / T / B)',
-            `${c.calibration.x_left_0deg} / ${c.calibration.x_right_360deg} / ${c.calibration.y_top_plot} / ${c.calibration.y_bottom_plot}`,
-          ],
-          ['Mode', c.calibration.calibration_mode ?? '-'],
-          ['Source', c.calibration.calibration_source ?? '-'],
-          ['Preset loaded', c.calibration.calibration_preset_loaded ? 'Yes' : 'No'],
-        ])}
-
-        {groupHead('Gap-Time & Severity')}
-        {kv([
-          ['Gap angle', fmt(c.gap.gap_angle_deg, 4, ' deg')],
-          ['Gap time', fmt(c.gap.gap_time_ms, 4, ' ms')],
-          ['Band', c.gap.gap_time_band ?? '-'],
-          ['Line source / status', `${c.gap.gap_line_source ?? '-'} / ${c.gap.gap_measurement_status ?? '-'}`],
-          ['Auto-gap status', c.gap.auto_gap_status ?? '-'],
-          ['Cluster detection', c.gap.cluster_detection_status ?? '-'],
-          ['Severity', c.severity_by_gap_time ?? '-'],
-        ])}
-
-        {groupHead('PD Source')}
-        {kv([
-          ['Suggested', c.suggested_pd_source_type ?? '-'],
-          ['Confirmed by reviewer', c.confirmed_pd_source_type ?? '-'],
-          ['Rule', c.pd_selection_rule ?? '-'],
-          ['Strong rule?', c.is_strong_pd_rule ? 'Yes' : 'No, needs human confirmation'],
-        ])}
-
-        {groupHead('Reviewer Sign-off')}
-        {kv([
-          ['Reviewer', `${c.reviewer_name ?? '-'} (${c.reviewer_role ?? '-'})`],
-          ['Status', c.review_status],
-          ['Note', c.review_note || '-'],
-          ['Not measurable reason', c.not_measurable_reason || '-'],
-        ])}
-      </tbody>
-    </table>
+    <div>
+      {groups.map(([title, rows], i) => (
+        <Collapse key={title} title={title} defaultOpen={i === 0} meta={t(`${rows.length} fields`, `${rows.length} รายการ`)}>
+          <KV rows={rows} />
+        </Collapse>
+      ))}
+    </div>
   );
 }
 
-
 export default function CaseWizardPageWrapper() {
   return (
-    <Suspense fallback={<div className="p-8 text-center text-slate-400"><Spinner label="Loading case…" /></div>}>
+    <Suspense fallback={<Spinner />}>
       <CaseWizardPage />
     </Suspense>
   );

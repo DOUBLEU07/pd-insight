@@ -521,6 +521,80 @@ def rerun_auto_calibration(
     return serialize_case(case, include_detail=True)
 
 
+@router.post("/{case_id}/calibration/apply-to-batch")
+def apply_calibration_to_batch(
+    case_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Copy this case's axes to the rest of its folder import.
+
+    The "calibrate the first image once" step: only unsigned cases of the same
+    image size are touched, since pixel coordinates mean nothing on an image of
+    another size and a signed-off review must not change underneath its
+    reviewer.
+    """
+    from PIL import Image
+
+    case = owned_case(db, case_id, user)
+    if case.batch_id is None:
+        raise HTTPException(status_code=400, detail="This case is not part of a folder import.")
+
+    frame = {
+        "x_left_0deg": case.x_left_0deg,
+        "x_right_360deg": case.x_right_360deg,
+        "y_top_plot": case.y_top_plot,
+        "y_bottom_plot": case.y_bottom_plot,
+    }
+    if any(v is None for v in frame.values()) or case.image_width is None:
+        raise HTTPException(status_code=400, detail="Calibrate this case before copying its axes.")
+
+    others = db.scalars(
+        select(Case).where(Case.batch_id == case.batch_id, Case.id != case.id)
+    ).all()
+
+    updated = skipped_done = skipped_size = 0
+    for other in others:
+        if other.status == "done":
+            skipped_done += 1
+            continue
+
+        width, height = other.image_width, other.image_height
+        if width is None or height is None:
+            # Not analysed yet: read the size from the header only.
+            try:
+                with Image.open(settings.storage_dir / other.prpd_storage_path) as img:
+                    width, height = img.size
+            except (OSError, TypeError):
+                skipped_size += 1
+                continue
+        if (width, height) != (case.image_width, case.image_height):
+            skipped_size += 1
+            continue
+
+        for field, new in frame.items():
+            old = getattr(other, field)
+            if old != new:
+                if other.analysis_run:
+                    log_edit(db, other, field, old, new, user.username)
+                setattr(other, field, new)
+        other.calibration_source = "manual_axis_adjusted"
+        other.calibration_mode = "Manual calibration"
+        other.calibration_preset_loaded = False
+        if other.analysis_run:
+            recompute_gap(db, other)
+        updated += 1
+
+    log_usage(
+        db,
+        user.username,
+        "apply_calibration_to_batch",
+        f"{case.case_base_name}: {updated} case(s)",
+    )
+    db.commit()
+    return {"updated": updated, "skipped_done": skipped_done, "skipped_size": skipped_size}
+
+
 @router.post("/{case_id}/calibration/apply-preset/{preset_id}")
 def apply_preset(
     case_id: int,

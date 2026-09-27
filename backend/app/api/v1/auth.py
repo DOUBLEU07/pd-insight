@@ -93,6 +93,35 @@ def me(user: User = Depends(get_current_user)) -> dict[str, str]:
     return {"username": user.username, "role": user.role}
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    # Same bounds as signup, so a password that could be created can be kept.
+    new_password: str = Field(min_length=6, max_length=128)
+
+
+@router.post("/change-password")
+def change_password(
+    payload: ChangePasswordRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect.",
+        )
+    if payload.new_password == payload.current_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The new password must be different from the current one.",
+        )
+
+    user.password_hash = hash_password(payload.new_password)
+    log_usage(db, user.username, "change_password")
+    db.commit()
+    return {"ok": True}
+
+
 @router.post("/logout")
 def logout(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict[str, bool]:
     log_usage(db, user.username, "logout")
