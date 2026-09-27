@@ -110,17 +110,8 @@ The backend engine (`backend/app/services/ml/engine.py`):
 
 ### 3. How to Set Up Your Models
 
-#### Option A: Point Directly to Your Existing Download Folder (Recommended)
-If you already have your model files or Google Drive download folder extracted on your computer:
-1. Open `.env` in the project root.
-2. Set `MODELS_HOST_DIR` to the path where your models reside:
-   ```env
-   MODELS_HOST_DIR=C:/Users/focus/OneDrive/Desktop/data project
-   ```
-   *Docker Compose will mount this directory read-only into `/models` inside the container. Thanks to recursive search, subdirectories such as `All/` and `CMD_auto_gap_model/models/` are indexed automatically.*
-
-#### Option B: Copy Files into Local `./models/` Directory
-You can organize the models inside the project repository:
+#### Option A: Copy Files into Local `./models/` Directory (Recommended)
+Organize the models inside the project repository:
 1. Create a `models` directory at the project root:
    ```
    pd-insight/
@@ -129,10 +120,10 @@ You can organize the models inside the project repository:
    │   ├── PRPD_TF_1_sigmoid_best.keras
    │   └── auto_gap_time_abstract_v1.keras
    ```
-2. In `.env`, ensure:
-   ```env
-   MODELS_HOST_DIR=./models
-   ```
+2. In `.env`, `MODELS_HOST_DIR` already defaults to `./models` — no changes needed.
+
+#### Option B: Point to a Different Folder
+If your model files live elsewhere, set `MODELS_HOST_DIR` in `.env` to that folder's path. Docker Compose mounts it read-only into `/models` inside the container, and recursive search indexes any subdirectories automatically.
 
 #### Option C: Running Locally Without Docker
 When running the backend directly with Python:
@@ -168,7 +159,7 @@ WEB_PORT=3000
 
 JWT_SECRET=your-random-secret-key
 ENABLE_ML=true
-MODELS_HOST_DIR=C:/Users/focus/OneDrive/Desktop/data project
+MODELS_HOST_DIR=./models
 AUTO_GAP_MODEL_VERSION=auto_gap_time_abstract_v1
 ```
 

@@ -23,9 +23,9 @@ export default function LoginPage() {
   const { isDark, toggleTheme } = useTheme();
 
   const [mode, setMode] = useState<'login' | 'signup'>('login');
-  const [username, setUsername] = useState('natthawutrit.2545@gmail.com');
-  const [password, setPassword] = useState('phasepulse');
-  const [fullName, setFullName] = useState('Natthawut Rit');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [fullName, setFullName] = useState('');
   const [role, setRole] = useState('researcher');
   const [roles, setRoles] = useState<string[]>(['researcher']);
   const [showPassword, setShowPassword] = useState(false);
@@ -206,8 +206,8 @@ export default function LoginPage() {
               onClick={() =>
                 alert(
                   t(
-                    'Ask the administrator to reset your password. Demo account:\nnatthawutrit.2545@gmail.com / phasepulse\n\nOnce signed in, change it under Settings → Change password.',
-                    'ติดต่อผู้ดูแลระบบเพื่อรีเซ็ตรหัสผ่าน บัญชีทดลอง:\nnatthawutrit.2545@gmail.com / phasepulse\n\nเมื่อเข้าสู่ระบบแล้ว เปลี่ยนรหัสได้ที่ การตั้งค่า → เปลี่ยนรหัสผ่าน',
+                    'Ask the administrator to reset your password.\n\nOnce signed in, change it under Settings → Change password.',
+                    'ติดต่อผู้ดูแลระบบเพื่อรีเซ็ตรหัสผ่าน\n\nเมื่อเข้าสู่ระบบแล้ว เปลี่ยนรหัสได้ที่ การตั้งค่า → เปลี่ยนรหัสผ่าน',
                   ),
                 )
               }
