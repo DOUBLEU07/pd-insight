@@ -614,6 +614,48 @@ html.dark {
     height: 18px;
     color: var(--primary-ink);
   }
+  /* ---- foldable cards (FoldToggle) ---- */
+  .fold-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    margin-left: -6px;
+    border-radius: 6px;
+    color: var(--muted);
+    flex: none;
+    transition: background 0.15s var(--ease);
+  }
+  .fold-toggle:hover {
+    background: var(--surface-2);
+    color: var(--ink);
+  }
+  .fold-toggle svg {
+    width: 18px;
+    height: 18px;
+    color: currentColor;
+    transform: rotate(90deg);
+    transition: transform 0.2s var(--ease);
+  }
+  .card[data-folded] .fold-toggle svg {
+    transform: rotate(0deg);
+  }
+  .card[data-folded] > :not(.card-head):not(.card-title):not(.fold-keep) {
+    display: none !important;
+  }
+  .card[data-folded] > .card-head,
+  .card[data-folded] > .card-title,
+  .card[data-folded] > .fold-keep {
+    margin-bottom: 0 !important;
+  }
+  .card[data-folded] > .card-head .card-sub {
+    display: none;
+  }
+  .table-card[data-folded] > .card-head {
+    padding-bottom: 16px;
+  }
+
   .card-sub,
   .hint {
     font-size: 14px;
@@ -1734,6 +1776,151 @@ html.dark {
     color: var(--muted);
     font-size: 12px;
     font-weight: 600;
+  }
+
+  /* ---- first-use tutorial ---- */
+  .modal-head .eyebrow {
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--primary-ink);
+    margin-bottom: 2px;
+  }
+  .tutorial-mock {
+    position: relative;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface-2);
+    padding: 30px 14px 14px;
+    min-height: 220px;
+    animation: fade-up 0.22s var(--ease);
+  }
+  .tutorial-tag {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+  }
+  .tutorial-dots {
+    display: flex;
+    gap: 5px;
+  }
+  .tutorial-dots i {
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: var(--line);
+    transition: background 0.2s var(--ease), width 0.2s var(--ease);
+  }
+  .tutorial-dots i.done {
+    background: var(--primary-line);
+  }
+  .tutorial-dots i.on {
+    width: 18px;
+    background: var(--primary);
+  }
+  .tutorial-flow {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 8px;
+  }
+  .tutorial-flow li {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+  }
+  .tutorial-flow small {
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+  .tutorial-flow .step-no {
+    display: inline-grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    background: var(--primary-soft);
+    color: var(--primary-ink);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .tutorial-prpd {
+    width: 100%;
+    height: auto;
+    border-radius: 8px;
+    background: var(--surface);
+  }
+  .tutorial-prpd .frame {
+    fill: none;
+    stroke: var(--line);
+  }
+  .tutorial-prpd .axis {
+    stroke: var(--line);
+    stroke-dasharray: 3 3;
+  }
+  .tutorial-prpd .sine {
+    fill: none;
+    stroke: var(--muted);
+    stroke-width: 1;
+    opacity: 0.6;
+  }
+  .tutorial-prpd .pt {
+    fill: var(--primary);
+    opacity: 0.75;
+  }
+  .tutorial-prpd .gap {
+    fill: var(--primary-soft);
+    opacity: 0.6;
+  }
+  .tutorial-prpd .gap-line {
+    stroke: var(--danger);
+    stroke-width: 1.6;
+  }
+  .tutorial-prpd .lbl {
+    font-size: 9px;
+    fill: var(--muted);
+  }
+
+  .folder-chips {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 150px;
+    overflow-y: auto;
+  }
+  .folder-chips li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 4px 4px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+    font-size: 14px;
+    min-width: 0;
+  }
+  .folder-chips li > svg {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    color: var(--primary-ink);
+  }
+  .folder-chips li span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .folder-chips li small {
+    margin-left: auto;
+    flex: none;
+    font-family: 'IBM Plex Mono', monospace;
+    color: var(--muted);
   }
 
   .stat-chips {

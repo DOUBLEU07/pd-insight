@@ -17,17 +17,7 @@ import {
   SparkleIcon,
   XIcon,
 } from '@/components/ui/icons';
-import {
-  Collapse,
-  KV,
-  Readout,
-  Spinner,
-  StatusBadge,
-  fmt,
-  fmtDate,
-  resultPillClass,
-  severityPillClass,
-} from '@/components/ui/primitives';
+import { Collapse, FoldToggle, KV, Readout, Spinner, StatusBadge, fmt, fmtDate, resultPillClass, severityPillClass } from '@/components/ui/primitives';
 import { api, fileUrl } from '@/lib/api';
 import { useApp } from '@/lib/app-context';
 import { useI18n } from '@/lib/i18n';
@@ -239,6 +229,16 @@ function CaseWizardPage() {
     void commitGap(next.left, next.right);
   }
 
+  /** Drop both lines inside the frame so they can be dragged into place. */
+  function placeGapLines() {
+    if (!frame) return;
+    const width = frame.x_right - frame.x_left;
+    const left = Math.round(frame.x_left + width * 0.3);
+    const right = Math.round(frame.x_left + width * 0.6);
+    setGapLines({ left, right });
+    void commitGap(left, right);
+  }
+
   async function detectGap(method: 'rule' | 'model') {
     if (!pdCase) return;
     try {
@@ -328,7 +328,6 @@ function CaseWizardPage() {
   const decisionMode = options?.decision_modes.find((m) => m.key === c.decision_mode);
   const singleCluster = gap.auto_not_measurable_recommended === true;
   const alreadySaved = c.status === 'done';
-  const advanceBlocked = singleCluster && !alreadySaved && reviewStatus !== 'not_measurable';
   const inFolder = c.batch_id != null && queueTotal > 1;
 
   return (
@@ -392,7 +391,7 @@ function CaseWizardPage() {
           <section className="card">
             <div className="card-head">
               <div>
-                <h2 className="card-title">
+                <h2 className="card-title"><FoldToggle />
                   {t('Classification result', 'ผลการจำแนก')} <span className="tag">{t('read-only', 'อ่านอย่างเดียว')}</span>
                 </h2>
                 <p className="card-sub">{describeModel(c.ai_model_used, c.ai_input_mode, t)}</p>
@@ -473,7 +472,7 @@ function CaseWizardPage() {
 
           <div className="stack">
             <section className="card">
-              <h2 className="card-title mb-1">{t('PD source', 'แหล่งกำเนิด PD')}</h2>
+              <h2 className="card-title mb-1"><FoldToggle />{t('PD source', 'แหล่งกำเนิด PD')}</h2>
               <p className="card-sub mb-3">
                 {t(
                   'Suggested from the scores. Confirm or change it: the confirmed source decides the severity table.',
@@ -538,7 +537,7 @@ function CaseWizardPage() {
           <section className="card">
             <div className="card-head">
               <div>
-                <h2 className="card-title">{t('Fit the axes to the plot', 'ปรับแกนให้ตรงกับกราฟ')}</h2>
+                <h2 className="card-title"><FoldToggle />{t('Fit the axes to the plot', 'ปรับแกนให้ตรงกับกราฟ')}</h2>
                 <p className="card-sub">
                   {t(
                     'Drag the blue lines onto 0° and 360°, and the orange lines onto the top and bottom of the plot.',
@@ -593,7 +592,7 @@ function CaseWizardPage() {
           <section className="card">
             <div className="card-head">
               <div>
-                <h2 className="card-title">{t('Measure the gap-time', 'วัด Gap-Time')}</h2>
+                <h2 className="card-title"><FoldToggle />{t('Measure the gap-time', 'วัด Gap-Time')}</h2>
                 <p className="card-sub">
                   {t(
                     'Place the lines on the facing edges of the two discharge clusters. The saved value always comes from these lines.',
@@ -638,14 +637,18 @@ function CaseWizardPage() {
               disabled={gapLines.left == null}
             />
             <div className="mt-3 flex flex-wrap items-center gap-2 text-[14px]">
-              {singleCluster ? (
+              {singleCluster && (
                 <>
-                  <span className="pill pill-red">{t('Single discharge cluster', 'มีกลุ่มการคายประจุกลุ่มเดียว')}</span>
+                  <span className="pill pill-amber">{t('Single discharge cluster', 'มีกลุ่มการคายประจุกลุ่มเดียว')}</span>
                   <span className="text-muted">
-                    {t('Gap-time is not measurable. Choose Not measurable at sign-off.', 'วัด Gap-Time ไม่ได้ เลือก "วัดไม่ได้" ในขั้นยืนยันผล')}
+                    {t(
+                      'Gap-time may not be measurable. You can still place the lines; if the clusters cannot be separated, choose Not measurable at sign-off.',
+                      'อาจวัด Gap-Time ไม่ได้ ยังวางเส้นได้ตามปกติ ถ้าแยกกลุ่มไม่ได้ ให้เลือก "วัดไม่ได้" ในขั้นยืนยันผล',
+                    )}
                   </span>
                 </>
-              ) : gapLines.left != null ? (
+              )}
+              {gapLines.left != null ? (
                 <>
                   <span className="pill pill-green">
                     {gap.gap_line_source === 'ai_auto'
@@ -661,7 +664,10 @@ function CaseWizardPage() {
               ) : (
                 <>
                   <span className="pill pill-gray">{t('No lines yet', 'ยังไม่มีเส้น')}</span>
-                  <span className="text-muted">{t('Use Detect or Suggest above.', 'กดตรวจจับหรือแนะนำด้านบน')}</span>
+                  <span className="text-muted">{t('Use Detect or Suggest above, or', 'กดตรวจจับหรือแนะนำด้านบน หรือ')}</span>
+                  <button type="button" className="btn btn-secondary btn-sm" disabled={!frame} onClick={placeGapLines}>
+                    {t('Place lines by hand', 'วางเส้นเอง')}
+                  </button>
                 </>
               )}
             </div>
@@ -669,7 +675,7 @@ function CaseWizardPage() {
 
           <div className="stack">
             <section className="card">
-              <h2 className="card-title mb-3">{t('Measurement', 'ค่าที่วัดได้')}</h2>
+              <h2 className="card-title mb-3"><FoldToggle />{t('Measurement', 'ค่าที่วัดได้')}</h2>
               <div className="readout-grid">
                 <Readout label={t('Gap angle', 'มุม Gap')} value={fmt(gap.gap_angle_deg, 2, '°')} />
                 <Readout label="Gap-Time" value={fmt(gap.gap_time_ms, 3, ' ms')} />
@@ -682,7 +688,7 @@ function CaseWizardPage() {
               </div>
             </section>
             <section className="card">
-              <h2 className="card-title mb-3">{t('How severity is decided', 'วิธีกำหนดความรุนแรง')}</h2>
+              <h2 className="card-title mb-3"><FoldToggle />{t('How severity is decided', 'วิธีกำหนดความรุนแรง')}</h2>
               <SeverityMatrix pdCase={c} />
               <p className="callout callout-amber mt-3 text-[13.5px]">
                 {t(
@@ -700,7 +706,7 @@ function CaseWizardPage() {
         <div className="split">
           <section className="card">
             <div className="card-head">
-              <h2 className="card-title">{t('Case summary', 'สรุปเคส')}</h2>
+              <h2 className="card-title"><FoldToggle />{t('Case summary', 'สรุปเคส')}</h2>
               <div className="flex flex-wrap gap-2">
                 <button className="btn btn-secondary btn-sm" type="button" onClick={() => downloadSummaryImage(c.case_base_name)}>
                   <DownloadIcon />
@@ -740,7 +746,7 @@ function CaseWizardPage() {
         <section className="card">
           <div className="card-head">
             <div>
-              <h2 className="card-title">{t('Reviewer sign-off', 'ผู้ตรวจยืนยันผล')}</h2>
+              <h2 className="card-title"><FoldToggle />{t('Reviewer sign-off', 'ผู้ตรวจยืนยันผล')}</h2>
               <p className="card-sub">
                 {t(
                   'Saving records you as the reviewer of this case.',
@@ -796,8 +802,8 @@ function CaseWizardPage() {
           {singleCluster && reviewStatus !== 'not_measurable' && (
             <div className="callout callout-amber mt-3">
               {t(
-                'Only one discharge cluster was found, so a measurable status will be rejected. Choose Not measurable.',
-                'พบกลุ่มการคายประจุเพียงกลุ่มเดียว สถานะที่วัดได้จะถูกปฏิเสธ กรุณาเลือก "วัดไม่ได้"',
+                'Only one discharge cluster was found. Check the gap lines before saving a measured value, or choose Not measurable.',
+                'พบกลุ่มการคายประจุเพียงกลุ่มเดียว ตรวจเส้น Gap ก่อนบันทึกค่าที่วัดได้ หรือเลือก "วัดไม่ได้"',
               )}
             </div>
           )}
@@ -823,7 +829,7 @@ function CaseWizardPage() {
               <button
                 className="btn btn-primary ml-auto"
                 type="button"
-                disabled={saving || advanceBlocked}
+                disabled={saving}
                 onClick={() => void saveAndAdvance()}
               >
                 {alreadySaved ? '' : t('Save and ', 'บันทึกแล้ว')}
@@ -931,7 +937,7 @@ function AxesPanel({
   return (
     <div className="stack">
       <section className="card">
-        <h2 className="card-title mb-3">{t('Axis values', 'ค่าแกน')}</h2>
+        <h2 className="card-title mb-3"><FoldToggle />{t('Axis values', 'ค่าแกน')}</h2>
         <div className="readout-grid !grid-cols-2">
           {fields.map(([key, label]) => (
             <label className="readout" key={key}>
@@ -981,7 +987,7 @@ function AxesPanel({
       </section>
 
       <section className="card">
-        <h2 className="card-title mb-1">{t('Saved axis presets', 'ค่าแกนที่บันทึกไว้')}</h2>
+        <h2 className="card-title mb-1"><FoldToggle />{t('Saved axis presets', 'ค่าแกนที่บันทึกไว้')}</h2>
         <p className="card-sub mb-3">
           {t('Presets load automatically for new images of the same size.', 'ค่าที่บันทึกจะถูกใช้อัตโนมัติกับภาพใหม่ที่มีขนาดเท่ากัน')}
         </p>
@@ -1064,7 +1070,7 @@ function AxesPanel({
 
       {inFolder && (
         <section className="card">
-          <h2 className="card-title mb-1">{t('Rest of this folder', 'เคสที่เหลือในโฟลเดอร์')}</h2>
+          <h2 className="card-title mb-1"><FoldToggle />{t('Rest of this folder', 'เคสที่เหลือในโฟลเดอร์')}</h2>
           <p className="card-sub mb-3">
             {t(
               'Copy these axes to every case in the folder that has the same image size and is not signed off yet.',

@@ -8,26 +8,31 @@ under its own directory.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import asdict
+from pathlib import Path
 from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 from sqlalchemy import desc, func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.security import get_current_user
+from app.core.security import get_current_user, is_admin
 from app.db.session import get_db
 from app.models.entities import Case, TrainedModel, UsageLog, User
 from app.services.case_service import log_usage, thresholds_for
-from app.services import rules
+from app.services import rules, trash
 from app.services.cv import detect
 from app.services.ml import engine as ml
 from app.services.ml import training
-from app.services.storage import decode_image
+from app.services.storage import decode_image, safe_text_name
 
 router = APIRouter(prefix="/training", tags=["training"])
 
@@ -100,7 +105,7 @@ def _serialize(row: TrainedModel, *, detail: bool = False) -> dict[str, Any]:
 
 def _owned(db: Session, model_id: int, user: User) -> TrainedModel:
     row = db.get(TrainedModel, model_id)
-    if row is None or row.owner_id != user.id:
+    if row is None or row.owner_id != user.id or row.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Model not found")
     return row
 
@@ -172,6 +177,7 @@ def training_stats(
         "training_runs": len(models),
         "usage_events": usage_count,
         "username": user.username,
+        "is_admin": is_admin(user),
         "tensorflow_available": ml.engine.status()["tensorflow_available"],
         "recommended_split": training.RECOMMENDED_SPLIT,
         "canonical_classes": training.CANONICAL_CLASSES,
@@ -194,7 +200,8 @@ class ClassSpec(BaseModel):
 
 
 class CreateModelRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=128)
+    # Blank means "name it for me": see _auto_name.
+    name: str = Field(default="", max_length=128)
     kind: str = "prpd_only"
     classes: list[ClassSpec] | None = None
     # Accepted for callers that only want the published three classes.
@@ -272,12 +279,22 @@ def create_model(
 
     config = _validate_config(payload)
 
-    name = payload.name.strip()
-    if db.scalar(
-        select(TrainedModel).where(TrainedModel.owner_id == user.id, TrainedModel.name == name)
-    ):
+    name = payload.name.strip() or _auto_name(db, user, payload.kind)
+    # Trashed models still hold their names, so they are looked up too.
+    clash = db.scalar(
+        select(TrainedModel)
+        .where(TrainedModel.owner_id == user.id, TrainedModel.name == name)
+        .execution_options(include_deleted=True)
+    )
+    if clash is not None:
         raise HTTPException(
-            status_code=409, detail=f'You already have a model called "{name}".'
+            status_code=409,
+            detail=(
+                f'A model called "{name}" is in your trash. Restore it, delete it '
+                "permanently, or choose another name."
+                if clash.deleted_at is not None
+                else f'You already have a model called "{name}".'
+            ),
         )
 
     row = TrainedModel(
@@ -301,6 +318,22 @@ def create_model(
     db.commit()
     db.refresh(row)
     return _serialize(row, detail=True)
+
+
+def _auto_name(db: Session, user: User, kind: str) -> str:
+    """First free "<type> <n>" among this account's models, trashed ones included."""
+    base = "PRPD-only" if kind == "prpd_only" else "Hybrid"
+    taken = set(
+        db.scalars(
+            select(TrainedModel.name)
+            .where(TrainedModel.owner_id == user.id)
+            .execution_options(include_deleted=True)
+        ).all()
+    )
+    n = 1
+    while f"{base} {n}" in taken:
+        n += 1
+    return f"{base} {n}"
 
 
 def _resolve_classes(payload: CreateModelRequest) -> list[ClassSpec]:
@@ -572,18 +605,113 @@ def deactivate_models(
 def delete_model(
     model_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ) -> None:
-    """Remove a model and everything staged for it."""
+    """Move a model to the trash. A draft (a cancelled wizard) is removed outright."""
     row = _owned(db, model_id, user)
     if row.status in ("queued", "running"):
         raise HTTPException(
             status_code=409, detail="Wait for this run to finish before deleting it."
         )
 
-    training.discard_dataset(user.id, row.id)
     name = row.name
-    db.delete(row)
+    if row.status == "draft":
+        training.discard_dataset(user.id, row.id)
+        db.delete(row)
+    else:
+        trash.trash_model(db, row)
     log_usage(db, user.username, "delete_model", name)
     db.commit()
+
+
+class ConsentRequest(BaseModel):
+    data_consent: bool
+
+
+@router.post("/models/{model_id}/consent")
+def set_consent(
+    model_id: int,
+    payload: ConsentRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Record the answer to the share dialog shown when training starts."""
+    row = _owned(db, model_id, user)
+    row.data_consent = payload.data_consent
+    row.consent_at = datetime.now(timezone.utc) if payload.data_consent else None
+    training.write_consent_marker(
+        user.id, row.id, username=user.username, model_name=row.name, consent=payload.data_consent
+    )
+    answer = "shared" if payload.data_consent else "not shared"
+    log_usage(db, user.username, "dataset_consent", f"{row.name}: {answer}")
+    db.commit()
+    db.refresh(row)
+    return _serialize(row)
+
+
+@router.get("/models/{model_id}/dataset")
+def download_dataset(
+    model_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+) -> FileResponse:
+    """The images a model was trained on, as a zip.
+
+    The owner can always download their own. An admin can also download any
+    account's dataset that its owner agreed to share, and nothing else.
+    """
+    row = db.get(TrainedModel, model_id)
+    allowed = (
+        row is not None
+        and row.deleted_at is None
+        and row.status != "draft"
+        and (row.owner_id == user.id or (is_admin(user) and row.data_consent))
+    )
+    if not allowed:
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    handle, path = tempfile.mkstemp(suffix=".zip")
+    os.close(handle)
+    if training.write_dataset_zip(row.owner_id, row.id, Path(path)) == 0:
+        os.unlink(path)
+        raise HTTPException(status_code=404, detail="No images are stored for this model.")
+
+    stem = safe_text_name(row.name)
+    if row.owner_id == user.id:
+        filename = f"{stem}_dataset.zip"
+        detail = row.name
+    else:
+        owner = db.get(User, row.owner_id)
+        owner_name = owner.username if owner else str(row.owner_id)
+        filename = f"{safe_text_name(owner_name)}_{stem}_dataset.zip"
+        detail = f"{row.name} (shared by {owner_name})"
+    log_usage(db, user.username, "download_dataset", detail)
+    db.commit()
+
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        filename=filename,
+        background=BackgroundTask(os.unlink, path),
+    )
+
+
+@router.get("/shared")
+def shared_datasets(
+    db: Session = Depends(get_db), user: User = Depends(get_current_user)
+) -> list[dict[str, Any]]:
+    """Every dataset an account agreed to share, for the admins who collect them."""
+    if not is_admin(user):
+        raise HTTPException(status_code=403, detail="Only an admin can see shared datasets.")
+
+    rows = db.execute(
+        select(TrainedModel, User.username)
+        .join(User, User.id == TrainedModel.owner_id)
+        .where(TrainedModel.data_consent.is_(True), TrainedModel.status != "draft")
+        .order_by(desc(TrainedModel.consent_at))
+    ).all()
+    out = []
+    for row, username in rows:
+        item = _serialize(row)
+        item["owner"] = username
+        out.append(item)
+    return out
 
 
 def _store_counts(row: TrainedModel, summary: dict[str, Any]) -> None:

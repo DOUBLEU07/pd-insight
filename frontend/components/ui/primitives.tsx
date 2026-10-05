@@ -1,6 +1,6 @@
 'use client';
 
-import type { CSSProperties, ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 
 import { CheckIcon, ChevronRightIcon } from '@/components/ui/icons';
 import { useI18n } from '@/lib/i18n';
@@ -182,5 +182,37 @@ export function Meter({ value, accent }: { value: number; accent?: string }) {
     <div className="meter" style={accent ? ({ ['--accent' as string]: accent } as CSSProperties) : undefined}>
       <i style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
     </div>
+  );
+}
+
+/**
+ * Chevron that folds the surrounding `.card` down to its heading. Placed as
+ * the first child of a card's `.card-title`; the CSS hides every other child
+ * of the card while `data-folded` is set on it.
+ */
+export function FoldToggle({ defaultFolded = false }: { defaultFolded?: boolean }) {
+  const { t } = useI18n();
+  const ref = useRef<HTMLButtonElement>(null);
+  const [folded, setFolded] = useState(defaultFolded);
+
+  useLayoutEffect(() => {
+    const card = ref.current?.closest('.card');
+    if (!card) return;
+    card.toggleAttribute('data-folded', folded);
+    return () => card.removeAttribute('data-folded');
+  }, [folded]);
+
+  return (
+    <button
+      ref={ref}
+      type="button"
+      className="fold-toggle"
+      aria-expanded={!folded}
+      title={folded ? t('Expand', 'ขยาย') : t('Collapse', 'พับเก็บ')}
+      aria-label={folded ? t('Expand section', 'ขยายหัวข้อนี้') : t('Collapse section', 'พับหัวข้อนี้')}
+      onClick={() => setFolded((v) => !v)}
+    >
+      <ChevronRightIcon />
+    </button>
   );
 }

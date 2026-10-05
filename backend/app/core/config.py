@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 24 * 7
     cors_origins: str = "http://localhost:3000"
+    # Comma-separated accounts that may download the datasets other accounts
+    # agreed to share. An account whose role is "admin" qualifies as well.
+    admin_usernames: str = ""
     storage_dir: Path = Path("storage")
     models_dir: Path = Path("models")
 
@@ -58,6 +61,10 @@ class Settings(BaseSettings):
     cycle_time_ms: float = 20.0
 
     allowed_extensions: tuple[str, ...] = (".jpg", ".jpeg", ".png", ".bmp")
+
+    @property
+    def admin_username_list(self) -> list[str]:
+        return [u.strip() for u in self.admin_usernames.split(",") if u.strip()]
 
     @property
     def cors_origin_list(self) -> list[str]:

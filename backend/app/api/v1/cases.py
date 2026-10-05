@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
-from sqlalchemy import delete, func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import (
@@ -22,8 +22,8 @@ from app.core.config import (
 )
 from app.core.security import get_current_user
 from app.db.session import get_db
-from app.models.entities import Batch, CalibrationPreset, Case, EditHistory, User
-from app.services import rules
+from app.models.entities import Batch, CalibrationPreset, Case, User
+from app.services import rules, trash
 from app.services.case_service import (
     active_model_for,
     find_matching_preset,
@@ -758,7 +758,9 @@ def validate_gap(
         y_bottom=case.y_bottom_plot or 0,
         left_x=case.left_line_pixel,
         right_x=case.right_line_pixel,
-        not_measurable_recommended=bool(case.auto_not_measurable_recommended),
+        # The single-cluster flag is advice, not a veto: the reviewer may place
+        # the lines and save a measured value anyway (project review notes).
+        not_measurable_recommended=False,
         thresholds=thresholds_for_case(db, case),
     )
     return {"valid": ok, "message": message}
@@ -799,7 +801,8 @@ def save_review(
             y_bottom=case.y_bottom_plot or 0,
             left_x=case.left_line_pixel,
             right_x=case.right_line_pixel,
-            not_measurable_recommended=bool(case.auto_not_measurable_recommended),
+            # Advisory only, as in validate_gap above.
+            not_measurable_recommended=False,
             thresholds=thresholds_for_case(db, case),
         )
         if not ok:
@@ -886,24 +889,11 @@ def delete_case(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> None:
+    """Move a case to the trash (its batch too, once nothing is left in it)."""
     case = owned_case(db, case_id, user)
 
     name = case.case_base_name
-    batch_id = case.batch_id
-
-    db.execute(delete(EditHistory).where(EditHistory.case_id == case.id))
-    db.delete(case)
-    db.flush()
-
-    # Drop the batch too once its last case is gone.
-    if batch_id is not None:
-        remaining = db.scalar(
-            select(func.count(Case.id)).where(Case.batch_id == batch_id)
-        )
-        if not remaining:
-            batch = db.get(Batch, batch_id)
-            if batch is not None:
-                db.delete(batch)
+    trash.trash_case(db, case)
 
     log_usage(db, user.username, "delete_case", name)
     db.commit()

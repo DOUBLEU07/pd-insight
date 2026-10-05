@@ -133,7 +133,12 @@ def next_batch_key(db: Session, prefix: str = "B") -> str:
     unique index.
     """
     stem = f"{prefix}-{datetime.now().strftime('%Y%m%d')}-"
-    issued = db.scalars(select(Batch.batch_key).where(Batch.batch_key.like(f"{stem}%"))).all()
+    # Trashed batches still hold their keys in the unique index.
+    issued = db.scalars(
+        select(Batch.batch_key)
+        .where(Batch.batch_key.like(f"{stem}%"))
+        .execution_options(include_deleted=True)
+    ).all()
 
     highest = 0
     for key in issued:
@@ -152,21 +157,21 @@ def next_batch_key(db: Session, prefix: str = "B") -> str:
 # indistinguishable from one that does not exist.
 def owned_case(db: Session, case_id: int, user: User) -> Case:
     case = db.get(Case, case_id)
-    if case is None or case.owner_id != user.id:
+    if case is None or case.owner_id != user.id or case.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Case not found")
     return case
 
 
 def owned_batch(db: Session, batch_id: int, user: User) -> Batch:
     batch = db.get(Batch, batch_id)
-    if batch is None or batch.owner_id != user.id:
+    if batch is None or batch.owner_id != user.id or batch.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Batch not found")
     return batch
 
 
 def owned_preset(db: Session, preset_id: int, user: User) -> CalibrationPreset:
     preset = db.get(CalibrationPreset, preset_id)
-    if preset is None or preset.owner_id != user.id:
+    if preset is None or preset.owner_id != user.id or preset.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Preset not found")
     return preset
 
@@ -459,7 +464,9 @@ def suggest_gap_lines(db: Session, case: Case, prefer: str = "auto") -> dict[str
 
     case.auto_gap_status = chosen_status
 
-    if chosen and not single_cluster:
+    # Lines are placed even for a single cluster, so the reviewer can still
+    # adjust and measure; the not-measurable recommendation stays alongside.
+    if chosen:
         case.auto_left_line_pixel = float(chosen["left_line_x"])
         case.auto_right_line_pixel = float(chosen["right_line_x"])
         case.left_line_pixel = float(chosen["left_line_x"])

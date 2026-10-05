@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 
 import { groupCasesBySeverity, SeverityGroupCards, type SeverityKey } from '@/components/case/SeverityGroups';
 import { ArrowLeftIcon, PlayIcon } from '@/components/ui/icons';
-import { Meter, Spinner, fmtDate } from '@/components/ui/primitives';
+import { FoldToggle, Meter, Spinner, fmtDate } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/app-context';
 import { useI18n } from '@/lib/i18n';
@@ -40,10 +40,15 @@ export default function BatchPreviewPage() {
   }, [batchId, load]);
 
   async function removeCase(id: number, name: string) {
-    if (!window.confirm(t(`Delete case "${name}"? This cannot be undone.`, `ลบเคส "${name}"? ไม่สามารถย้อนกลับได้`))) return;
+    if (
+      !window.confirm(
+        t(`Move case "${name}" to the trash? You can restore it for 30 days.`, `ย้ายเคส "${name}" ไปถังขยะ? กู้คืนได้ภายใน 30 วัน`),
+      )
+    )
+      return;
     try {
       await api.deleteCase(id);
-      toast(t(`Deleted ${name}`, `ลบ ${name} แล้ว`));
+      toast(t(`Moved ${name} to the trash`, `ย้าย ${name} ไปถังขยะแล้ว`));
       void load();
     } catch (e) {
       toast(e instanceof Error ? e.message : t('Delete failed', 'ลบไม่สำเร็จ'));
@@ -74,7 +79,7 @@ export default function BatchPreviewPage() {
               <ArrowLeftIcon />
               {t('Folders', 'โฟลเดอร์ทั้งหมด')}
             </button>
-            <h2 className="card-title text-[20px]">{batch.name}</h2>
+            <h2 className="card-title text-[20px]"><FoldToggle />{batch.name}</h2>
             <p className="card-sub">
               {t(
                 `Uploaded ${fmtDate(batch.upload_date, locale)} · ${batch.total} case(s) · ${reviewed} reviewed`,
@@ -104,7 +109,7 @@ export default function BatchPreviewPage() {
 
       <section className="card">
         <div className="card-head">
-          <h2 className="card-title">{t('Cases by severity', 'เคสตามความรุนแรง')}</h2>
+          <h2 className="card-title"><FoldToggle />{t('Cases by severity', 'เคสตามความรุนแรง')}</h2>
           <select
             value={severityFilter}
             onChange={(e) => setSeverityFilter(e.target.value as SeverityFilter)}

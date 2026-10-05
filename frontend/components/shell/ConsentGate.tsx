@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { getAcceptedTermsToday, getDataConsent, recordConsent } from '@/lib/consent';
 import { useI18n } from '@/lib/i18n';
@@ -12,11 +12,16 @@ import { useI18n } from '@/lib/i18n';
  */
 let acknowledgedThisLoad = false;
 
-export function ConsentGate({ onDecline }: { onDecline: () => void }) {
+export function ConsentGate({ onDecline, onSettled }: { onDecline: () => void; onSettled?: () => void }) {
   const { t } = useI18n();
   const [visible, setVisible] = useState(() => !acknowledgedThisLoad && !getAcceptedTermsToday());
   const [terms, setTerms] = useState(false);
   const [data, setData] = useState(() => getDataConsent());
+
+  // Tells the layout the terms are out of the way (accepted now or earlier today).
+  useEffect(() => {
+    if (!visible) onSettled?.();
+  }, [visible, onSettled]);
 
   if (!visible) return null;
 

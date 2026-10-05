@@ -18,17 +18,7 @@ import {
   UploadIcon,
   XIcon,
 } from '@/components/ui/icons';
-import {
-  DoneBadge,
-  EmptyRow,
-  Spinner,
-  StatusBadge,
-  UploadBanner,
-  fmt,
-  fmtDate,
-  resultPillClass,
-  severityPillClass,
-} from '@/components/ui/primitives';
+import { DoneBadge, EmptyRow, FoldToggle, Spinner, StatusBadge, UploadBanner, fmt, fmtDate, resultPillClass, severityPillClass } from '@/components/ui/primitives';
 import { api, fileUrl } from '@/lib/api';
 import { useApp } from '@/lib/app-context';
 import { useI18n } from '@/lib/i18n';
@@ -62,16 +52,23 @@ function extOf(name: string): string {
 }
 
 /** Every file under a dropped folder (drag and drop gives entries, not a FileList). */
-async function filesFromDrop(dt: DataTransfer): Promise<{ files: File[]; folder: string | null }> {
+async function filesFromDrop(
+  dt: DataTransfer,
+): Promise<{ files: File[]; paths: string[]; folder: string | null }> {
   const entries = Array.from(dt.items ?? [])
     .map((item) => item.webkitGetAsEntry?.())
     .filter((e): e is FileSystemEntry => !!e);
-  if (entries.length === 0) return { files: Array.from(dt.files), folder: null };
+  if (entries.length === 0) {
+    const files = Array.from(dt.files);
+    return { files, paths: files.map((f) => f.name), folder: null };
+  }
 
   const out: File[] = [];
+  const paths: string[] = [];
   async function walk(entry: FileSystemEntry): Promise<void> {
     if (entry.isFile) {
       out.push(await new Promise<File>((res, rej) => (entry as FileSystemFileEntry).file(res, rej)));
+      paths.push(entry.fullPath.replace(/^\//, ''));
       return;
     }
     if (entry.isDirectory) {
@@ -86,7 +83,13 @@ async function filesFromDrop(dt: DataTransfer): Promise<{ files: File[]; folder:
   }
   for (const entry of entries) await walk(entry);
   const folder = entries.length === 1 && entries[0].isDirectory ? entries[0].name : null;
-  return { files: out, folder };
+  return { files: out, paths, folder };
+}
+
+/** The folder a staged file came from, as shown in the staged-folder list. */
+function dirOf(path: string, fallback: string): string {
+  const cut = path.lastIndexOf('/');
+  return cut > 0 ? path.slice(0, cut) : fallback;
 }
 
 function CaseWorkflowPage() {
@@ -183,7 +186,7 @@ function SingleUpload() {
     <section className="card">
       <div className="card-head">
         <div>
-          <h2 className="card-title">{t('Upload the images', 'อัปโหลดภาพ')}</h2>
+          <h2 className="card-title"><FoldToggle />{t('Upload the images', 'อัปโหลดภาพ')}</h2>
           <p className="card-sub">
             {t(
               'A PRPD image alone runs the PRPD-only model. Add the TF map from the same measurement to use the Hybrid model.',
@@ -370,6 +373,8 @@ function DropZone({
 // ===========================================================================
 interface Staged {
   files: File[];
+  /** Folder of each entry in `files`, same order. */
+  dirs: string[];
   skipped: number;
   folder: string | null;
   stamp: number;
@@ -407,14 +412,23 @@ function FolderUpload() {
     void loadLists();
   }, [loadLists]);
 
-  function stage(raw: File[], folder: string | null) {
+  function stage(raw: File[], folder: string | null, paths?: string[]) {
     if (raw.length === 0) return;
-    const images = raw.filter((f) => allowed.includes(extOf(f.name)));
+    const rel = (f: File, i: number) =>
+      paths?.[i] || (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
+    const images = raw.map((f, i) => ({ f, path: rel(f, i) })).filter(({ f }) => allowed.includes(extOf(f.name)));
     const kept = images.slice(0, MAX_BATCH);
     const skipped = raw.length - images.length;
-    const rel = (raw[0] as File & { webkitRelativePath?: string }).webkitRelativePath;
-    const name = folder ?? (rel ? rel.split('/')[0] : null);
-    setStaged((prev) => ({ files: kept, skipped, folder: name, stamp: (prev?.stamp ?? 0) + 1 }));
+    const first = rel(raw[0], 0);
+    const name = folder ?? (first.includes('/') ? first.split('/')[0] : null);
+    const loose = t('Selected files', 'ไฟล์ที่เลือก');
+    setStaged((prev) => ({
+      files: kept.map(({ f }) => f),
+      dirs: kept.map(({ path }) => dirOf(path, name ?? loose)),
+      skipped,
+      folder: name,
+      stamp: (prev?.stamp ?? 0) + 1,
+    }));
     setBatchName(name || `Batch ${new Date().toLocaleDateString(locale)}`);
     if (images.length > MAX_BATCH) {
       toast(
@@ -429,8 +443,8 @@ function FolderUpload() {
   async function onDrop(e: DragEvent) {
     e.preventDefault();
     setDrag(false);
-    const { files, folder } = await filesFromDrop(e.dataTransfer);
-    stage(files, folder);
+    const { files, paths, folder } = await filesFromDrop(e.dataTransfer);
+    stage(files, folder, paths);
   }
 
   const stats = useMemo(() => {
@@ -470,6 +484,42 @@ function FolderUpload() {
     }
   }
 
+  /** Staged sub-folders and how many images each holds, in first-seen order. */
+  const stagedDirs = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const d of staged?.dirs ?? []) counts.set(d, (counts.get(d) ?? 0) + 1);
+    return [...counts.entries()];
+  }, [staged]);
+
+  function unstageDir(dir: string) {
+    setStaged((prev) => {
+      if (!prev) return prev;
+      const keep = prev.dirs.map((d) => d !== dir);
+      const files = prev.files.filter((_, i) => keep[i]);
+      if (files.length === 0) return null;
+      return { ...prev, files, dirs: prev.dirs.filter((_, i) => keep[i]) };
+    });
+  }
+
+  async function removeBatch(b: BatchSummary) {
+    if (
+      !window.confirm(
+        t(
+          `Move folder "${b.name}" and its ${b.total} case(s) to the trash? You can restore it for 30 days.`,
+          `ย้ายโฟลเดอร์ "${b.name}" และ ${b.total} เคสไปถังขยะ? กู้คืนได้ภายใน 30 วัน`,
+        ),
+      )
+    )
+      return;
+    try {
+      await api.deleteBatch(b.id);
+      toast(t(`Moved ${b.name} to the trash`, `ย้าย ${b.name} ไปถังขยะแล้ว`));
+      void loadLists();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : t('Delete failed', 'ลบไม่สำเร็จ'));
+    }
+  }
+
   const uploading = progress !== null;
   const visibleBatches = showAll ? batches ?? [] : (batches ?? []).slice(0, 6);
 
@@ -503,7 +553,7 @@ function FolderUpload() {
 
         <div className="card-head">
           <div>
-            <h2 className="card-title">{t('Upload a folder', 'อัปโหลดโฟลเดอร์')}</h2>
+            <h2 className="card-title"><FoldToggle />{t('Upload a folder', 'อัปโหลดโฟลเดอร์')}</h2>
             <p className="card-sub">
               {t(
                 `Up to ${MAX_BATCH} images. PRPD and TF map files are paired by name (<case>_PRPD / <case>_TF); a PRPD without a TF map is analysed on its own.`,
@@ -597,6 +647,28 @@ function FolderUpload() {
                     <span>{t('Not images', 'ไม่ใช่ภาพ')}</span>
                   </div>
                 </div>
+                <div>
+                  <span className="label">{t('Folders in this upload', 'โฟลเดอร์ที่จะอัปโหลด')}</span>
+                  <ul className="folder-chips">
+                    {stagedDirs.map(([dir, count]) => (
+                      <li key={dir} title={dir}>
+                        <FolderIcon />
+                        <span>{dir}</span>
+                        <small>{count}</small>
+                        <button
+                          type="button"
+                          className="icon-only"
+                          disabled={uploading}
+                          aria-label={t(`Remove ${dir}`, `เอา ${dir} ออก`)}
+                          title={t('Remove this folder from the upload', 'เอาโฟลเดอร์นี้ออกจากการอัปโหลด')}
+                          onClick={() => unstageDir(dir)}
+                        >
+                          <XIcon />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
                 <div className="file-list" aria-label={t('Selected files', 'ไฟล์ที่เลือก')}>
                   {staged.files.slice(0, 60).map((f, i) => (
                     <div key={`${f.name}-${i}`} title={f.name}>
@@ -679,7 +751,7 @@ function FolderUpload() {
 
       <section className="card table-card">
         <div className="card-head">
-          <h2 className="card-title">{t('Imported folders', 'โฟลเดอร์ที่นำเข้าแล้ว')}</h2>
+          <h2 className="card-title"><FoldToggle />{t('Imported folders', 'โฟลเดอร์ที่นำเข้าแล้ว')}</h2>
         </div>
         {batches === null ? (
           <Spinner />
@@ -708,9 +780,18 @@ function FolderUpload() {
                     <td>
                       <StatusBadge status={b.overall_status} />
                     </td>
-                    <td className="text-right">
+                    <td className="whitespace-nowrap text-right">
                       <button type="button" className="btn btn-secondary btn-sm" onClick={() => router.push(`/batches/${b.id}`)}>
                         {t('Open', 'เปิด')}
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-only ml-1 align-middle text-muted hover:text-danger"
+                        aria-label={t(`Delete folder ${b.name}`, `ลบโฟลเดอร์ ${b.name}`)}
+                        title={t('Move this folder to the trash', 'ย้ายโฟลเดอร์นี้ไปถังขยะ')}
+                        onClick={() => void removeBatch(b)}
+                      >
+                        <XIcon />
                       </button>
                     </td>
                   </tr>
@@ -779,10 +860,18 @@ function ResultsView() {
   }, [cases, query, status]);
 
   async function removeCase(c: PdCase) {
-    if (!window.confirm(t(`Delete case "${c.case_base_name}"? This cannot be undone.`, `ลบเคส "${c.case_base_name}"? ไม่สามารถย้อนกลับได้`))) return;
+    if (
+      !window.confirm(
+        t(
+          `Move case "${c.case_base_name}" to the trash? You can restore it for 30 days.`,
+          `ย้ายเคส "${c.case_base_name}" ไปถังขยะ? กู้คืนได้ภายใน 30 วัน`,
+        ),
+      )
+    )
+      return;
     try {
       await api.deleteCase(c.id);
-      toast(t(`Deleted ${c.case_base_name}`, `ลบ ${c.case_base_name} แล้ว`));
+      toast(t(`Moved ${c.case_base_name} to the trash`, `ย้าย ${c.case_base_name} ไปถังขยะแล้ว`));
       void load();
     } catch (e) {
       toast(e instanceof Error ? e.message : t('Delete failed', 'ลบไม่สำเร็จ'));
@@ -807,7 +896,7 @@ function ResultsView() {
     <section className="card table-card">
       <div className="card-head">
         <div>
-          <h2 className="card-title">{t('Assessment cases', 'รายการเคส')}</h2>
+          <h2 className="card-title"><FoldToggle />{t('Assessment cases', 'รายการเคส')}</h2>
           <p className="card-sub">
             {t(
               `${cases?.length ?? 0} cases · ${doneCount} reviewed. Click a row to show its full data.`,

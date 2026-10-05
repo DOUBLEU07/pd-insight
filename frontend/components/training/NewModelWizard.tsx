@@ -7,7 +7,6 @@ import { CheckIcon, FolderIcon, ImageIcon, TrashIcon, XIcon } from '@/components
 import { Collapse, DoneBadge, UploadBanner } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/app-context';
-import { getDataConsent } from '@/lib/consent';
 import { useI18n } from '@/lib/i18n';
 import { serverText, stageText } from '@/lib/server-text';
 import type { ClassSpec, DatasetSplit, DatasetSummary, ModelKind, TrainedModelDetail } from '@/lib/types';
@@ -34,12 +33,29 @@ const PUBLISHED_CLASSES: ClassSpec[] = [
   { name: 'Internal', pd_source: 'Internal', severity_group: 2 },
 ];
 
+/** Hybrid first: when both are trained, its pair counts are the ones shown. */
+const KINDS: ModelKind[] = ['hybrid', 'prpd_only'];
+
 const POLL_MS = 1200;
 
 type T = <V = string>(en: V, th: V) => V;
 
+type PerKind<V> = Partial<Record<ModelKind, V>>;
+
+interface DatasetState {
+  dataset: DatasetSummary;
+  blocking: string[];
+  warnings: string[];
+}
+
 function relPath(f: File): string {
   return (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
+}
+
+/** Mirrors backend detect.filename_suggests_tf, which pairs Hybrid samples. */
+function isTfMap(f: File): boolean {
+  const lower = f.name.toLowerCase();
+  return lower.includes('tf') || lower.includes('twmap');
 }
 
 /** Where a file from a dataset folder belongs, read from its folder names. */
@@ -60,19 +76,17 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
   const { t } = useI18n();
 
   const [step, setStep] = useState(0);
-  const [name, setName] = useState('');
-  const [kind, setKind] = useState<ModelKind>('prpd_only');
+  // Nothing is ticked up front: the account picks which model(s) to build.
+  const [kinds, setKinds] = useState<Record<ModelKind, boolean>>({ prpd_only: false, hybrid: false });
+  const [names, setNames] = useState<Record<ModelKind, string>>({ prpd_only: '', hybrid: '' });
   const [classes, setClasses] = useState<ClassSpec[]>(PUBLISHED_CLASSES);
   const [newClass, setNewClass] = useState('');
   const [maxEpochs, setMaxEpochs] = useState('12');
   const [batchSize, setBatchSize] = useState('16');
   const [learningRate, setLearningRate] = useState('0.001');
-  const [dataConsent, setDataConsent] = useState(() => getDataConsent());
 
-  const [model, setModel] = useState<TrainedModelDetail | null>(null);
-  const [dataset, setDataset] = useState<DatasetSummary | null>(null);
-  const [blocking, setBlocking] = useState<string[]>([]);
-  const [warnings, setWarnings] = useState<string[]>([]);
+  const [drafts, setDrafts] = useState<PerKind<TrainedModelDetail>>({});
+  const [data, setData] = useState<PerKind<DatasetState>>({});
   const [rejected, setRejected] = useState<{ filename: string; reason: string }[]>([]);
   const [landed, setLanded] = useState<Record<string, number>>({});
   const [lastUpload, setLastUpload] = useState<{ count: number; detail: string; stamp: number } | null>(null);
@@ -80,6 +94,8 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
 
   const [busy, setBusy] = useState(false);
   const [checklistConfirmed, setChecklistConfirmed] = useState(false);
+  const [askConsent, setAskConsent] = useState(false);
+  const [runs, setRuns] = useState<TrainedModelDetail[]>([]);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const finishedRef = useRef(false);
   const datasetFolderInput = useRef<HTMLInputElement>(null);
@@ -93,40 +109,66 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
 
   const splitLabel = (s: DatasetSplit) =>
     ({ train: t('Train', 'ฝึก (Train)'), test: t('Test', 'ทดสอบ (Test)'), valid: t('Validation', 'ตรวจสอบ (Valid)') })[s];
+  const kindLabel = (k: ModelKind) => (k === 'hybrid' ? 'Hybrid (PRPD + TF map)' : 'PRPD-only');
 
   const isCustomClasses =
     classes.length !== PUBLISHED_CLASSES.length || classes.some((c, i) => c.name !== PUBLISHED_CLASSES[i].name);
+
+  const chosenKinds = KINDS.filter((k) => kinds[k]);
+  const draftKinds = KINDS.filter((k) => drafts[k]);
+  const primary = draftKinds[0];
+  const primaryData = primary ? data[primary] : undefined;
+  const classNames = primary ? drafts[primary]!.class_names : [];
+  const both = draftKinds.length === 2;
+  const withHybrid = !!drafts.hybrid;
+  const readyKinds = draftKinds.filter((k) => (data[k]?.blocking.length ?? 1) === 0);
 
   function updateClass(index: number, patch: Partial<ClassSpec>) {
     setClasses((v) => v.map((c, i) => (i === index ? { ...c, ...patch } : c)));
   }
 
-  function applyResult(r: { dataset: DatasetSummary; blocking: string[]; warnings: string[] }) {
-    setDataset(r.dataset);
-    setBlocking(r.blocking);
-    setWarnings(r.warnings);
+  function applyResult(kind: ModelKind, r: DatasetState) {
+    setData((prev) => ({ ...prev, [kind]: { dataset: r.dataset, blocking: r.blocking, warnings: r.warnings } }));
+  }
+
+  async function discardDrafts(list: PerKind<TrainedModelDetail>) {
+    for (const d of Object.values(list)) {
+      if (d && d.status === 'draft') {
+        try {
+          await api.deleteModel(d.id);
+        } catch {
+          /* closing matters more than tidying up */
+        }
+      }
+    }
   }
 
   // ------------------------------------------------------------ step 1 → 2
-  async function createDraft() {
-    if (!name.trim()) return;
+  async function createDrafts() {
+    if (chosenKinds.length === 0) return;
     setBusy(true);
+    const created: PerKind<TrainedModelDetail> = {};
     try {
-      const created = await api.createModel({
-        name: name.trim(),
-        kind,
-        classes: classes.map((c) => ({ ...c, name: c.name.trim() })),
-        max_epochs: Number(maxEpochs),
-        batch_size: Number(batchSize),
-        learning_rate: Number(learningRate),
-        backbone: 'mobilenetv2',
-        data_consent: dataConsent,
-      });
-      const detail = await api.getModel(created.id);
-      setModel(detail);
-      applyResult(detail);
+      for (const kind of chosenKinds) {
+        const draft = await api.createModel({
+          name: names[kind].trim(),
+          kind,
+          classes: classes.map((c) => ({ ...c, name: c.name.trim() })),
+          max_epochs: Number(maxEpochs),
+          batch_size: Number(batchSize),
+          learning_rate: Number(learningRate),
+          backbone: 'mobilenetv2',
+          // Asked in a dialog when training starts, not here.
+          data_consent: false,
+        });
+        created[kind] = await api.getModel(draft.id);
+      }
+      setDrafts(created);
+      for (const kind of chosenKinds) applyResult(kind, created[kind]!);
       setStep(1);
     } catch (e) {
+      // Both drafts or neither: a name clash on the second must not leave the first behind.
+      await discardDrafts(created);
       toast(e instanceof Error ? e.message : t('Could not create the model', 'สร้างโมเดลไม่สำเร็จ'));
     } finally {
       setBusy(false);
@@ -134,34 +176,48 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
   }
 
   // ------------------------------------------------------------ step 2
-  /** Upload one or more (split, class) groups in turn, with one progress bar. */
+  /**
+   * Upload one or more (split, class) groups in turn, with one progress bar.
+   * Each group goes to every draft: all of it to Hybrid, and only the PRPD
+   * images to PRPD-only.
+   */
   async function uploadGroups(groups: { split: DatasetSplit; cls: string; files: File[] }[], skipped = 0) {
-    if (!model || groups.length === 0) return;
+    if (draftKinds.length === 0 || groups.length === 0) return;
+    const jobs = groups.flatMap((g) =>
+      draftKinds
+        .map((kind) => ({ ...g, kind, files: kind === 'prpd_only' ? g.files.filter((f) => !isTfMap(f)) : g.files }))
+        .filter((job) => job.files.length > 0),
+    );
+    if (jobs.length === 0) {
+      toast(t('Those were all TF maps. Add the PRPD images too.', 'ไฟล์ที่เลือกเป็น TF Map ทั้งหมด กรุณาเพิ่มภาพ PRPD ด้วย'));
+      return;
+    }
+
     setBusy(true);
-    const allRejected: { filename: string; reason: string }[] = [];
-    let accepted = 0;
+    const allRejected = new Map<string, { filename: string; reason: string }>();
+    const accepted = new Set<string>();
     try {
-      for (let g = 0; g < groups.length; g += 1) {
-        const { split, cls, files } = groups[g];
+      for (let j = 0; j < jobs.length; j += 1) {
+        const { split, cls, files, kind } = jobs[j];
         const label = `${cls} · ${splitLabel(split)}`;
-        setProgress({ label, value: g / groups.length });
-        const r = await api.uploadTrainingData(model.id, split, cls, files, (f) =>
-          setProgress({ label, value: (g + f) / groups.length }),
+        setProgress({ label, value: j / jobs.length });
+        const r = await api.uploadTrainingData(drafts[kind]!.id, split, cls, files, (f) =>
+          setProgress({ label, value: (j + f) / jobs.length }),
         );
-        applyResult(r);
-        allRejected.push(...r.rejected);
-        accepted += r.accepted.length;
+        applyResult(kind, r);
+        r.rejected.forEach((x) => allRejected.set(x.filename, x));
+        r.accepted.forEach((name) => accepted.add(`${split}/${cls}/${name}`));
         setLanded((prev) => ({ ...prev, [`${split}/${cls}`]: (prev[`${split}/${cls}`] ?? 0) + 1 }));
       }
-      setRejected(allRejected);
+      setRejected([...allRejected.values()]);
       setLastUpload((prev) => ({
-        count: accepted,
+        count: accepted.size,
         detail:
           groups.length === 1
             ? `${groups[0].cls} · ${splitLabel(groups[0].split)}`
             : t(`${groups.length} class/split folders`, `${groups.length} โฟลเดอร์ย่อย`) +
               (skipped ? t(` · ${skipped} file(s) not placed`, ` · ${skipped} ไฟล์ไม่ทราบตำแหน่ง`) : '') +
-              (allRejected.length ? t(` · ${allRejected.length} rejected`, ` · ปฏิเสธ ${allRejected.length}`) : ''),
+              (allRejected.size ? t(` · ${allRejected.size} rejected`, ` · ปฏิเสธ ${allRejected.size}`) : ''),
         stamp: (prev?.stamp ?? 0) + 1,
       }));
     } catch (e) {
@@ -182,12 +238,12 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
   }
 
   function uploadDatasetFolder(list: FileList | null) {
-    if (!model) return;
+    if (!primary) return;
     const buckets = new Map<string, { split: DatasetSplit; cls: string; files: File[] }>();
     let skipped = 0;
     for (const f of Array.from(list ?? [])) {
       if (!IMAGE_EXT.test(f.name)) continue;
-      const place = placeFile(relPath(f), model.class_names);
+      const place = placeFile(relPath(f), classNames);
       if (!place) {
         skipped += 1;
         continue;
@@ -209,10 +265,9 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
   }
 
   async function clearSlot(split: DatasetSplit, cls: string) {
-    if (!model) return;
     setBusy(true);
     try {
-      applyResult(await api.clearTrainingData(model.id, split, cls));
+      for (const kind of draftKinds) applyResult(kind, await api.clearTrainingData(drafts[kind]!.id, split, cls));
     } catch (e) {
       toast(e instanceof Error ? e.message : t('Could not clear that folder', 'ล้างข้อมูลไม่สำเร็จ'));
     } finally {
@@ -222,11 +277,11 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
 
   // ------------------------------------------------------------ step 4
   const poll = useCallback(
-    async (id: number) => {
+    async (ids: number[]) => {
       try {
-        const next = await api.getModel(id);
-        setModel(next);
-        if (next.status === 'completed' || next.status === 'failed') {
+        const next = await Promise.all(ids.map((id) => api.getModel(id)));
+        setRuns(next);
+        if (next.every((m) => m.status === 'completed' || m.status === 'failed')) {
           if (!finishedRef.current) {
             finishedRef.current = true;
             onFinished();
@@ -236,40 +291,52 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
       } catch {
         /* a dropped poll is not a failed run */
       }
-      pollTimer.current = setTimeout(() => void poll(id), POLL_MS);
+      pollTimer.current = setTimeout(() => void poll(ids), POLL_MS);
     },
     [onFinished],
   );
 
-  async function train() {
-    if (!model) return;
+  /** Runs once the share dialog is answered; either answer trains. */
+  async function train(share: boolean) {
+    setAskConsent(false);
     setBusy(true);
+    const started: TrainedModelDetail[] = [];
     try {
-      const started = await api.startTraining(model.id);
-      setModel(started);
+      for (const kind of draftKinds) {
+        const draft = drafts[kind]!;
+        if (!readyKinds.includes(kind)) {
+          // Not enough data for this one (e.g. Hybrid with no TF maps): drop it.
+          await api.deleteModel(draft.id).catch(() => undefined);
+          continue;
+        }
+        await api.setModelConsent(draft.id, share);
+        started.push(await api.startTraining(draft.id));
+      }
+      setDrafts({});
+      setRuns(started);
       setStep(3);
       finishedRef.current = false;
-      pollTimer.current = setTimeout(() => void poll(started.id), POLL_MS);
+      pollTimer.current = setTimeout(() => void poll(started.map((m) => m.id)), POLL_MS);
     } catch (e) {
       toast(e instanceof Error ? e.message : t('Could not start training', 'เริ่มเทรนไม่สำเร็จ'));
+      if (started.length) {
+        setDrafts({});
+        setRuns(started);
+        setStep(3);
+        pollTimer.current = setTimeout(() => void poll(started.map((m) => m.id)), POLL_MS);
+      }
     } finally {
       setBusy(false);
     }
   }
 
   async function cancel() {
-    if (model && model.status === 'draft') {
-      try {
-        await api.deleteModel(model.id);
-      } catch {
-        /* closing matters more than tidying up */
-      }
-    }
+    await discardDrafts(drafts);
     onClose();
   }
 
-  const running = model?.status === 'queued' || model?.status === 'running';
-  const done = model?.status === 'completed' || model?.status === 'failed';
+  const running = runs.some((m) => m.status === 'queued' || m.status === 'running');
+  const done = runs.length > 0 && !running;
   const stepLabels = [t('Model', 'โมเดล'), t('Data', 'ข้อมูล'), t('Criteria', 'เกณฑ์'), t('Train', 'เทรน')];
 
   return (
@@ -291,22 +358,14 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
           {/* ============================ STEP 1 ============================ */}
           {step === 0 && (
             <div className="stack">
-              <div className="field">
-                <label className="label" htmlFor="model-name">
-                  {t('Model name', 'ชื่อโมเดล')}
-                </label>
-                <input
-                  id="model-name"
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder={t('e.g. cable-termination-v1', 'เช่น cable-termination-v1')}
-                  autoFocus
-                />
-              </div>
-
               <div>
-                <span className="label">{t('Input', 'ข้อมูลนำเข้า')}</span>
+                <span className="label">{t('Which model(s) to train', 'โมเดลที่จะเทรน')}</span>
+                <p className="field-help !mt-0 mb-2">
+                  {t(
+                    'Tick one or both. Both are trained from the same upload: PRPD-only uses the PRPD images, Hybrid pairs each PRPD with its TF map. Leave a name blank to have one chosen for you.',
+                    'เลือกหนึ่งหรือทั้งสองแบบ ทั้งคู่เทรนจากการอัปโหลดชุดเดียวกัน PRPD-only ใช้ภาพ PRPD ส่วน Hybrid จับคู่ภาพ PRPD กับ TF Map เว้นชื่อว่างไว้เพื่อให้ระบบตั้งให้',
+                  )}
+                </p>
                 <div className="grid gap-2 md:grid-cols-2">
                   {(
                     [
@@ -314,13 +373,32 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
                       ['hybrid', 'Hybrid (PRPD + TF map)', t('A PRPD paired with the TF map from the same measurement.', 'ภาพ PRPD คู่กับ TF Map จากการวัดเดียวกัน')],
                     ] as const
                   ).map(([key, label, desc]) => (
-                    <label key={key} className={`option-card ${kind === key ? 'on' : ''}`}>
-                      <input type="radio" name="kind" checked={kind === key} onChange={() => setKind(key)} />
-                      <span>
-                        <span className="lbl">{label}</span>
-                        <span className="desc">{desc}</span>
-                      </span>
-                    </label>
+                    <div key={key} className={`option-card flex-col !items-stretch ${kinds[key] ? 'on' : ''}`}>
+                      <label className="flex cursor-pointer items-start gap-3">
+                        <input
+                          type="checkbox"
+                          checked={kinds[key]}
+                          onChange={(e) => setKinds((v) => ({ ...v, [key]: e.target.checked }))}
+                        />
+                        <span>
+                          <span className="lbl">{label}</span>
+                          <span className="desc">{desc}</span>
+                        </span>
+                      </label>
+                      {kinds[key] && (
+                        <input
+                          type="text"
+                          className="mt-2"
+                          value={names[key]}
+                          aria-label={t(`${label} model name`, `ชื่อโมเดล ${label}`)}
+                          placeholder={t(
+                            `Name (optional), e.g. ${key === 'hybrid' ? 'cable-hybrid-v1' : 'cable-prpd-v1'}`,
+                            `ชื่อ (ไม่บังคับ) เช่น ${key === 'hybrid' ? 'cable-hybrid-v1' : 'cable-prpd-v1'}`,
+                          )}
+                          onChange={(e) => setNames((v) => ({ ...v, [key]: e.target.value }))}
+                        />
+                      )}
+                    </div>
                   ))}
                 </div>
               </div>
@@ -439,27 +517,11 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
                   </div>
                 </div>
               </Collapse>
-
-              <label className={`option-card ${dataConsent ? 'on' : ''}`}>
-                <input type="checkbox" checked={dataConsent} onChange={(e) => setDataConsent(e.target.checked)} />
-                <span>
-                  <span className="lbl">
-                    {t('Share this dataset with the PhasePulse developers', 'แบ่งปันชุดข้อมูลนี้ให้ผู้พัฒนา PhasePulse')}{' '}
-                    <span className="tag">{t('optional', 'ไม่บังคับ')}</span>
-                  </span>
-                  <span className="desc">
-                    {t(
-                      'The images, their classes and this run’s accuracy, used to improve the published models. Declining changes nothing about training.',
-                      'ภาพ คลาส และความแม่นยำของการเทรนนี้ ใช้เพื่อปรับปรุงโมเดลตั้งต้น หากไม่ยินยอมก็ยังเทรนได้ตามปกติ',
-                    )}
-                  </span>
-                </span>
-              </label>
             </div>
           )}
 
           {/* ============================ STEP 2 ============================ */}
-          {step === 1 && dataset && model && (
+          {step === 1 && primaryData && (
             <div className="stack">
               <input
                 ref={datasetFolderInput}
@@ -480,12 +542,24 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
                   <b>{t('Upload the whole dataset folder at once', 'อัปโหลดทั้งโฟลเดอร์ชุดข้อมูลในครั้งเดียว')}</b>
                   <p className="hint text-[13.5px]">
                     {t(
-                      `Structure: train / test / valid, each with one folder per class (${model.class_names.join(', ')}).`,
-                      `โครงสร้าง: train / test / valid แต่ละโฟลเดอร์มีโฟลเดอร์ย่อยตามคลาส (${model.class_names.join(', ')})`,
+                      `Structure: train / test / valid, each with one folder per class (${classNames.join(', ')}).`,
+                      `โครงสร้าง: train / test / valid แต่ละโฟลเดอร์มีโฟลเดอร์ย่อยตามคลาส (${classNames.join(', ')})`,
                     )}
-                    {kind === 'hybrid' &&
-                      t(' Hybrid: put <case>_PRPD and <case>_TF side by side.', ' Hybrid: วาง <case>_PRPD และ <case>_TF ไว้ด้วยกัน')}
+                    {withHybrid
+                      ? t(
+                          ' Put each <case>_PRPD next to its <case>_TF map.',
+                          ' วาง <case>_PRPD คู่กับ <case>_TF ไว้ในโฟลเดอร์เดียวกัน',
+                        )
+                      : t(' PRPD images only.', ' ใช้ภาพ PRPD เท่านั้น')}
                   </p>
+                  {both && (
+                    <p className="hint mt-1 text-[13.5px]">
+                      {t(
+                        'Training both: PRPD images go to both models, TF maps to Hybrid only. If you upload no TF maps, only the PRPD-only model is trained.',
+                        'เทรนทั้งสองแบบ: ภาพ PRPD ใช้กับทั้งสองโมเดล ส่วน TF Map ใช้กับ Hybrid เท่านั้น ถ้าไม่อัปโหลด TF Map จะเทรนเฉพาะโมเดล PRPD-only',
+                      )}
+                    </p>
+                  )}
                 </div>
                 <button type="button" className="btn btn-primary" disabled={busy} onClick={() => datasetFolderInput.current?.click()}>
                   <FolderIcon />
@@ -519,16 +593,17 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
                 {SPLIT_KEYS.map((key) => (
                   <div className="readout" key={key}>
                     <div className="lbl">
-                      {splitLabel(key)} · {t('target', 'แนะนำ')} {dataset.recommended[key]}%
+                      {splitLabel(key)} · {t('target', 'แนะนำ')} {primaryData.dataset.recommended[key]}%
                     </div>
                     <div className="val">
-                      {dataset.totals[key]} <span className="text-[13px] text-muted">({dataset.percentages[key]}%)</span>
+                      {primaryData.dataset.totals[key]}{' '}
+                      <span className="text-[13px] text-muted">({primaryData.dataset.percentages[key]}%)</span>
                     </div>
                   </div>
                 ))}
                 <div className="readout">
-                  <div className="lbl">{kind === 'hybrid' ? t('Total pairs', 'คู่ทั้งหมด') : t('Total images', 'ภาพทั้งหมด')}</div>
-                  <div className="val">{dataset.total}</div>
+                  <div className="lbl">{withHybrid ? t('Total pairs', 'คู่ทั้งหมด') : t('Total images', 'ภาพทั้งหมด')}</div>
+                  <div className="val">{primaryData.dataset.total}</div>
                 </div>
               </div>
 
@@ -536,12 +611,12 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
                 <p className="hint mb-2 text-[13.5px]">
                   {t('Or fill one class and split at a time — pick a folder or individual files:', 'หรือเพิ่มทีละคลาสและชุด — เลือกเป็นโฟลเดอร์หรือเลือกไฟล์ก็ได้:')}
                 </p>
-                {model.class_names.map((cls) => (
+                {classNames.map((cls) => (
                   <div className="dataset-row" key={cls}>
                     <div className="mb-2 flex items-center justify-between">
                       <b>{cls}</b>
                       <span className="text-[13px] text-muted">
-                        {SPLIT_KEYS.reduce((sum, s) => sum + (dataset.per_class[cls]?.[s] ?? 0), 0)} {t('sample(s)', 'ตัวอย่าง')}
+                        {SPLIT_KEYS.reduce((sum, s) => sum + (primaryData.dataset.per_class[cls]?.[s] ?? 0), 0)} {t('sample(s)', 'ตัวอย่าง')}
                       </span>
                     </div>
                     <div className="dataset-splits">
@@ -549,9 +624,10 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
                         <SplitSlot
                           key={split}
                           label={splitLabel(split)}
-                          count={dataset.per_class[cls]?.[split] ?? 0}
-                          files={dataset.raw_per_class[cls]?.[split] ?? 0}
-                          hybrid={kind === 'hybrid'}
+                          count={primaryData.dataset.per_class[cls]?.[split] ?? 0}
+                          files={primaryData.dataset.raw_per_class[cls]?.[split] ?? 0}
+                          prpdImages={both ? data.prpd_only?.dataset.per_class[cls]?.[split] ?? 0 : null}
+                          hybrid={withHybrid}
                           landed={landed[`${split}/${cls}`] ?? 0}
                           busy={busy}
                           onFiles={(list) => uploadSlot(split, cls, list)}
@@ -576,32 +652,68 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
                   </ul>
                 </div>
               )}
-              {blocking.length > 0 && (
-                <div className="callout callout-amber">
-                  <b>{t('Still needed before training', 'ยังต้องเพิ่มก่อนเทรน')}</b>
-                  <ul className="bullets mt-1">
-                    {blocking.map((b) => (
-                      <li key={b}>{serverText(b, t)}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {warnings.length > 0 && (
-                <div className="callout">
-                  <b>{t('Worth checking', 'ควรตรวจสอบ')}</b>
-                  <ul className="bullets mt-1">
-                    {warnings.map((w) => (
-                      <li key={w}>{serverText(w, t)}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+              {draftKinds.map((kind) => {
+                const d = data[kind];
+                if (!d || (d.blocking.length === 0 && d.warnings.length === 0)) return null;
+                return (
+                  <div key={kind} className="stack !gap-2">
+                    {d.blocking.length > 0 && (
+                      <div className="callout callout-amber">
+                        <b>
+                          {both ? `${drafts[kind]!.name}: ` : ''}
+                          {t('Still needed before training', 'ยังต้องเพิ่มก่อนเทรน')}
+                        </b>
+                        <ul className="bullets mt-1">
+                          {d.blocking.map((b) => (
+                            <li key={b}>{serverText(b, t)}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {d.warnings.length > 0 && (
+                      <div className="callout">
+                        <b>
+                          {both ? `${drafts[kind]!.name}: ` : ''}
+                          {t('Worth checking', 'ควรตรวจสอบ')}
+                        </b>
+                        <ul className="bullets mt-1">
+                          {d.warnings.map((w) => (
+                            <li key={w}>{serverText(w, t)}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
 
           {/* ============================ STEP 3 ============================ */}
           {step === 2 && (
             <div className="stack">
+              <div>
+                <span className="label">{t('Models to train', 'โมเดลที่จะเทรน')}</span>
+                <ul className="space-y-1">
+                  {draftKinds.map((kind) => {
+                    const ready = readyKinds.includes(kind);
+                    return (
+                      <li key={kind} className="flex flex-wrap items-center gap-2 text-[14.5px]">
+                        <span className={`pill ${ready ? 'pill-green' : 'pill-gray'}`}>
+                          {ready ? t('Will train', 'จะเทรน') : t('Skipped', 'ข้าม')}
+                        </span>
+                        <b>{drafts[kind]!.name}</b>
+                        <span className="text-muted">· {kindLabel(kind)}</span>
+                        {!ready && (
+                          <span className="text-[13px] text-muted">
+                            — {serverText(data[kind]?.blocking[0] ?? '', t)}
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
               <p className="hint">
                 {t(
                   'These are the thresholds the rule engine compares this model’s scores against. Adjust them here if your data calls for it; changes apply to your account.',
@@ -628,59 +740,71 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
           )}
 
           {/* ============================ STEP 4 ============================ */}
-          {step === 3 && model && (
+          {step === 3 && (
             <div className="stack">
-              {running && (
-                <div>
-                  <div className="mb-1 flex justify-between text-[14.5px] font-semibold">
-                    <span>{stageText(model.stage, t) || t('Starting…', 'กำลังเริ่ม…')}</span>
-                    <span className="font-mono">{model.progress}%</span>
+              {runs.map((model) => (
+                <div key={model.id} className="rounded-[10px] border border-line p-4">
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    {model.status === 'completed' && <DoneBadge />}
+                    <b className="text-[16px]">{model.name}</b>
+                    <span className="text-[13.5px] text-muted">{model.kind_label}</span>
                   </div>
-                  <div className="progress">
-                    <i style={{ width: `${Math.max(4, model.progress)}%` }} />
-                  </div>
-                  <p className="hint mt-3">
-                    {t('You can close this window; training continues on the server.', 'ปิดหน้าต่างนี้ได้ การเทรนจะทำต่อบนเซิร์ฟเวอร์')}
-                  </p>
+                  {(model.status === 'queued' || model.status === 'running') && (
+                    <div>
+                      <div className="mb-1 flex justify-between text-[14.5px] font-semibold">
+                        <span>{stageText(model.stage, t) || t('Starting…', 'กำลังเริ่ม…')}</span>
+                        <span className="font-mono">{model.progress}%</span>
+                      </div>
+                      <div className="progress">
+                        <i style={{ width: `${Math.max(4, model.progress)}%` }} />
+                      </div>
+                    </div>
+                  )}
+                  {model.status === 'completed' && (
+                    <>
+                      <div className="readout-grid">
+                        <div className="readout">
+                          <div className="lbl">{t('Test accuracy', 'ความแม่นยำ (ทดสอบ)')}</div>
+                          <div className="val">{model.accuracy != null ? `${model.accuracy}%` : '-'}</div>
+                        </div>
+                        <div className="readout">
+                          <div className="lbl">{t('Validation accuracy', 'ความแม่นยำ (ตรวจสอบ)')}</div>
+                          <div className="val">{model.val_accuracy != null ? `${model.val_accuracy}%` : '-'}</div>
+                        </div>
+                        <div className="readout">
+                          <div className="lbl">Loss</div>
+                          <div className="val">{model.loss ?? '-'}</div>
+                        </div>
+                        <div className="readout">
+                          <div className="lbl">{t('Epochs', 'Epochs')}</div>
+                          <div className="val">{model.epochs}</div>
+                        </div>
+                      </div>
+                      {model.engine_used === 'simulated' && (
+                        <p className="callout callout-amber mt-3">
+                          {t('Simulated run — these figures are not a measured accuracy.', 'การเทรนแบบจำลอง — ตัวเลขนี้ไม่ใช่ความแม่นยำที่วัดจริง')}
+                        </p>
+                      )}
+                    </>
+                  )}
+                  {model.status === 'failed' && (
+                    <p className="callout callout-red">
+                      <b>{t('The run failed.', 'การเทรนล้มเหลว')}</b> {serverText(model.error, t)}
+                    </p>
+                  )}
                 </div>
+              ))}
+              {running && (
+                <p className="hint">
+                  {t('You can close this window; training continues on the server.', 'ปิดหน้าต่างนี้ได้ การเทรนจะทำต่อบนเซิร์ฟเวอร์')}
+                </p>
               )}
-              {model.status === 'completed' && (
-                <>
-                  <div className="flex items-center gap-3">
-                    <DoneBadge />
-                    <b className="text-[17px]">{t('Training finished', 'เทรนเสร็จแล้ว')}</b>
-                  </div>
-                  <div className="readout-grid">
-                    <div className="readout">
-                      <div className="lbl">{t('Test accuracy', 'ความแม่นยำ (ทดสอบ)')}</div>
-                      <div className="val">{model.accuracy != null ? `${model.accuracy}%` : '-'}</div>
-                    </div>
-                    <div className="readout">
-                      <div className="lbl">{t('Validation accuracy', 'ความแม่นยำ (ตรวจสอบ)')}</div>
-                      <div className="val">{model.val_accuracy != null ? `${model.val_accuracy}%` : '-'}</div>
-                    </div>
-                    <div className="readout">
-                      <div className="lbl">Loss</div>
-                      <div className="val">{model.loss ?? '-'}</div>
-                    </div>
-                    <div className="readout">
-                      <div className="lbl">{t('Epochs', 'Epochs')}</div>
-                      <div className="val">{model.epochs}</div>
-                    </div>
-                  </div>
-                  <p className={`callout ${model.engine_used === 'simulated' ? 'callout-amber' : ''}`}>
-                    {model.engine_used === 'simulated'
-                      ? t('Simulated run — these figures are not a measured accuracy.', 'การเทรนแบบจำลอง — ตัวเลขนี้ไม่ใช่ความแม่นยำที่วัดจริง')
-                      : t(
-                          'Close this window to see the learning curve, the confusion matrix and the test images the model got wrong.',
-                          'ปิดหน้าต่างนี้เพื่อดูกราฟการเรียนรู้ confusion matrix และภาพทดสอบที่โมเดลทายผิด',
-                        )}
-                  </p>
-                </>
-              )}
-              {model.status === 'failed' && (
-                <p className="callout callout-red">
-                  <b>{t('The run failed.', 'การเทรนล้มเหลว')}</b> {serverText(model.error, t)}
+              {done && (
+                <p className="hint">
+                  {t(
+                    'Close this window to see the learning curve, the confusion matrix and the test images each model got wrong.',
+                    'ปิดหน้าต่างนี้เพื่อดูกราฟการเรียนรู้ confusion matrix และภาพทดสอบที่แต่ละโมเดลทายผิด',
+                  )}
                 </p>
               )}
             </div>
@@ -688,17 +812,17 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
         </div>
 
         <div className="modal-foot">
-          <button className="btn btn-ghost" type="button" onClick={() => (done || running ? onClose() : void cancel())}>
-            {done || running ? t('Close', 'ปิด') : t('Cancel', 'ยกเลิก')}
+          <button className="btn btn-ghost" type="button" onClick={() => (step === 3 ? onClose() : void cancel())}>
+            {step === 3 ? t('Close', 'ปิด') : t('Cancel', 'ยกเลิก')}
           </button>
           <div className="flex items-center gap-2">
             {step === 0 && (
-              <button className="btn btn-primary" type="button" disabled={busy || !name.trim()} onClick={() => void createDraft()}>
+              <button className="btn btn-primary" type="button" disabled={busy || chosenKinds.length === 0} onClick={() => void createDrafts()}>
                 {t('Next: add data', 'ถัดไป: เพิ่มข้อมูล')}
               </button>
             )}
             {step === 1 && (
-              <button className="btn btn-primary" type="button" disabled={busy || blocking.length > 0} onClick={() => setStep(2)}>
+              <button className="btn btn-primary" type="button" disabled={busy || readyKinds.length === 0} onClick={() => setStep(2)}>
                 {t('Next: check criteria', 'ถัดไป: ตรวจเกณฑ์')}
               </button>
             )}
@@ -710,11 +834,13 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
                 <button
                   className="btn btn-success"
                   type="button"
-                  disabled={busy || !checklistConfirmed || blocking.length > 0}
-                  onClick={() => void train()}
+                  disabled={busy || !checklistConfirmed || readyKinds.length === 0}
+                  onClick={() => setAskConsent(true)}
                 >
                   <CheckIcon />
-                  {t('Start training', 'เริ่มเทรน')}
+                  {readyKinds.length > 1
+                    ? t(`Start training ${readyKinds.length} models`, `เริ่มเทรน ${readyKinds.length} โมเดล`)
+                    : t('Start training', 'เริ่มเทรน')}
                 </button>
               </>
             )}
@@ -726,6 +852,46 @@ export function NewModelWizard({ onClose, onFinished }: { onClose: () => void; o
           </div>
         </div>
       </div>
+
+      {askConsent && <ShareDialog onAnswer={(share) => void train(share)} onCancel={() => setAskConsent(false)} t={t} />}
+    </div>
+  );
+}
+
+/** Asked once, when training starts: may the developers have this dataset? */
+function ShareDialog({ onAnswer, onCancel, t }: { onAnswer: (share: boolean) => void; onCancel: () => void; t: T }) {
+  return (
+    <div className="modal-backdrop" role="alertdialog" aria-modal="true" aria-labelledby="share-title">
+      <div className="modal-card">
+        <div className="modal-head">
+          <h2 id="share-title">{t('Share this dataset with the PhasePulse developers?', 'แบ่งปันชุดข้อมูลนี้ให้ผู้พัฒนา PhasePulse หรือไม่?')}</h2>
+        </div>
+        <div className="modal-body">
+          <p>
+            {t(
+              'If you accept, the images, their classes and this run’s accuracy may be used to improve the published models. Your answer applies to every model in this run.',
+              'หากยอมรับ ภาพ คลาส และความแม่นยำของการเทรนนี้อาจถูกใช้เพื่อปรับปรุงโมเดลตั้งต้น คำตอบนี้ใช้กับทุกโมเดลในการเทรนครั้งนี้',
+            )}
+          </p>
+          <p className="hint mt-2">
+            {t('Declining changes nothing about training. Either way, training starts now.', 'หากไม่ยอมรับ การเทรนก็ทำได้ตามปกติ ไม่ว่าเลือกแบบใดการเทรนจะเริ่มทันที')}
+          </p>
+        </div>
+        <div className="modal-foot">
+          <button className="btn btn-ghost" type="button" onClick={onCancel}>
+            {t('Back', 'ย้อนกลับ')}
+          </button>
+          <div className="flex items-center gap-2">
+            <button className="btn btn-secondary" type="button" onClick={() => onAnswer(false)}>
+              {t('Decline', 'ไม่ยอมรับ')}
+            </button>
+            <button className="btn btn-primary" type="button" onClick={() => onAnswer(true)}>
+              <CheckIcon />
+              {t('Accept', 'ยอมรับ')}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -734,6 +900,7 @@ function SplitSlot({
   label,
   count,
   files,
+  prpdImages,
   hybrid,
   landed,
   busy,
@@ -744,6 +911,8 @@ function SplitSlot({
   label: string;
   count: number;
   files: number;
+  /** PRPD-only image count, shown alongside the pairs when both models are built. */
+  prpdImages: number | null;
   hybrid: boolean;
   landed: number;
   busy: boolean;
@@ -753,9 +922,10 @@ function SplitSlot({
 }) {
   const folderInput = useRef<HTMLInputElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const filled = count > 0 || (prpdImages ?? 0) > 0;
 
   return (
-    <div className={`split-slot ${count ? 'filled' : ''}`}>
+    <div className={`split-slot ${filled ? 'filled' : ''}`}>
       <input
         ref={folderInput}
         type="file"
@@ -791,6 +961,7 @@ function SplitSlot({
           : hybrid
             ? t('pairs', 'คู่')
             : t('images', 'ภาพ')}
+        {prpdImages != null && t(` · ${prpdImages} PRPD`, ` · PRPD ${prpdImages}`)}
       </div>
       <div className="actions">
         <button type="button" className="btn btn-secondary btn-sm" disabled={busy} onClick={() => folderInput.current?.click()}>
@@ -801,7 +972,7 @@ function SplitSlot({
           <ImageIcon />
           {t('Files', 'ไฟล์')}
         </button>
-        {files > 0 && (
+        {(files > 0 || (prpdImages ?? 0) > 0) && (
           <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={onClear} title={t('Remove these images', 'ลบภาพเหล่านี้')}>
             <TrashIcon />
             {t('Clear', 'ล้าง')}

@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 import { ConsentGate } from '@/components/shell/ConsentGate';
 import { HelpPopover } from '@/components/shell/HelpPopover';
+import { Tutorial } from '@/components/shell/Tutorial';
 import {
   ActivityIcon,
   AlertIcon,
@@ -17,8 +18,10 @@ import {
   MoonIcon,
   SettingsIcon,
   SignOutIcon,
+  SparkleIcon,
   SunIcon,
   TrainingIcon,
+  TrashIcon,
 } from '@/components/ui/icons';
 import { useApp } from '@/lib/app-context';
 import { useI18n } from '@/lib/i18n';
@@ -31,7 +34,7 @@ const INSTITUTION_LOGOS = [
   { src: '/logos/ece.png', alt: 'ECE KMUTNB', title: 'Department of Electrical and Computer Engineering, KMUTNB' },
 ];
 
-type Section = 'dashboard' | 'single' | 'folder' | 'results' | 'training' | 'settings';
+type Section = 'dashboard' | 'single' | 'folder' | 'results' | 'training' | 'settings' | 'trash';
 
 function useSection(): Section {
   const pathname = usePathname();
@@ -45,6 +48,7 @@ function useSection(): Section {
   }
   if (pathname.startsWith('/training')) return 'training';
   if (pathname.startsWith('/settings')) return 'settings';
+  if (pathname.startsWith('/trash')) return 'trash';
   return 'dashboard';
 }
 
@@ -101,6 +105,7 @@ function PageHead() {
     results: [t('PD assessment', 'การประเมิน PD'), t('Assessment results', 'ผลการประเมิน')],
     training: [t('Models', 'โมเดล'), t('Model development', 'พัฒนาโมเดล')],
     settings: [t('Account', 'บัญชี'), t('Settings', 'การตั้งค่า')],
+    trash: [t('Account', 'บัญชี'), t('Trash', 'ถังขยะ')],
   };
   const [eyebrow, title] = heads[section];
 
@@ -116,7 +121,7 @@ function PageHead() {
   );
 }
 
-function UserMenu({ onHelp }: { onHelp: () => void }) {
+function UserMenu({ onHelp, onTutorial }: { onHelp: () => void; onTutorial: () => void }) {
   const router = useRouter();
   const { user, signOut } = useApp();
   const { t } = useI18n();
@@ -191,6 +196,22 @@ function UserMenu({ onHelp }: { onHelp: () => void }) {
           </button>
           <button
             type="button"
+            className="menu-item"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onTutorial();
+            }}
+          >
+            <SparkleIcon />
+            {t('Getting-started tour', 'ทัวร์เริ่มต้นใช้งาน')}
+          </button>
+          <button type="button" className="menu-item" role="menuitem" onClick={() => go('/trash')}>
+            <TrashIcon />
+            {t('Trash', 'ถังขยะ')}
+          </button>
+          <button
+            type="button"
             className="menu-item danger"
             role="menuitem"
             onClick={() => void signOut()}
@@ -207,10 +228,13 @@ function UserMenu({ onHelp }: { onHelp: () => void }) {
 export default function AppLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { user, ready, signOut } = useApp();
+  const { user, ready, signOut, setTutorialSeen } = useApp();
   const { lang, setLang, t } = useI18n();
   const { isDark, toggleTheme } = useTheme();
   const [helpOpen, setHelpOpen] = useState(false);
+  // The tour waits for the terms dialog, so the two never stack.
+  const [consentSettled, setConsentSettled] = useState(false);
+  const [tourRequested, setTourRequested] = useState(false);
 
   useEffect(() => {
     if (ready && !user) router.replace('/login');
@@ -281,7 +305,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             <SettingsIcon />
           </button>
 
-          <UserMenu onHelp={() => setHelpOpen(true)} />
+          <UserMenu onHelp={() => setHelpOpen(true)} onTutorial={() => setTourRequested(true)} />
         </div>
       </header>
 
@@ -312,7 +336,15 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       </footer>
 
       <HelpPopover open={helpOpen} onClose={() => setHelpOpen(false)} />
-      <ConsentGate onDecline={() => void signOut()} />
+      <ConsentGate onDecline={() => void signOut()} onSettled={() => setConsentSettled(true)} />
+      {consentSettled && (tourRequested || user.tutorial_seen === false) && (
+        <Tutorial
+          onClose={() => {
+            setTourRequested(false);
+            if (user.tutorial_seen === false) void setTutorialSeen(true);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -28,7 +28,10 @@ A production-grade web application for partial discharge (PD) pattern analysis, 
    - Theme: Light, Dark, or Auto (dark 18:00–06:00), applied before first paint.
    - Bilingual: every page, dialog and the Help reference switch between English and Thai (`EN | TH`).
    - Account: change password from the account menu or Settings.
+   - Every section heading has an arrow that folds the section away.
+   - A first-use tour with sample data, shown once per account and reopened from the account menu.
 6. **Automated Schema Migrations:** Managed through Alembic with automatic upgrade on container startup.
+7. **Trash:** Deleted folders, cases, models and axis presets go to the trash (`/trash`) for 30 days, where they can be restored or deleted permanently. Expired items are purged on startup and whenever the trash is opened.
 
 ---
 
@@ -257,13 +260,14 @@ npm run dev
 The Model Training module provides end-to-end training and fine-tuning of custom models, fully isolated per user account:
 
 1. **New Model Wizard:**
-   - **Mode Selection:** Train a **PRPD-only** or **Hybrid (PRPD + T-F)** classification model.
+   - **Mode Selection:** Tick **PRPD-only**, **Hybrid (PRPD + T-F)** or both (nothing is ticked by default). Both are trained from one upload: PRPD images go to both models, T-F maps to Hybrid only, and a Hybrid model with no T-F maps is skipped. A blank name is filled in as `PRPD-only N` / `Hybrid N`.
    - **Model Architecture:** Transfer learning with **MobileNetV2** (ImageNet weights, cached in the Docker image at build time). The compact CNN option was removed because it did not train reliably.
    - **Defect Class Configuration:** Define custom defect classes (e.g. Corona, Surface, Internal, Floating) and map each to a PD Source and Severity Group (Group 1 or Group 2).
    - **Hyperparameters:** Configure training epochs, batch size, and learning rate with Early Stopping callbacks.
 2. **Dataset Management & Consent:**
    - Upload training and validation image sets partitioned per class.
-   - Built-in consent gating: User choice regarding anonymous research data collection is written to `CONSENT.json`.
+   - Consent dialog: pressing **Start training** asks whether the dataset may be shared with the developers (accept or decline; training starts either way). The answer is written to `CONSENT.json`.
+   - **Download dataset:** the owner can download the images a model was trained on as a zip (`<split>/<class>/<file>`, the same layout the wizard accepts). Accounts listed in `ADMIN_USERNAMES` (or with role `admin`) also see a **Shared datasets** table and can download any dataset its owner agreed to share.
 3. **Training Execution & Metrics:**
    - Background training task execution with real-time epoch, loss, and accuracy logging.
    - Trained `.keras` artifacts are saved under `storage/training/users/{user_id}/models/{model_id}/model.keras`.
@@ -283,6 +287,7 @@ The Model Training module provides end-to-end training and fine-tuning of custom
 | `/cases/[id]` | 5-Step Review Wizard | Step-by-step diagnostic verification, interactive canvas, gap-time adjustments, final sign-off. |
 | `/training` | Model Training Studio | Dataset staging stats, New Model Wizard, training runs history, live training logs. |
 | `/settings` | System Settings | Theme and language, change password, active model selector, saved axis presets, decision thresholds, engine status. |
+| `/trash` | Trash | Restore or permanently delete anything deleted in the last 30 days. |
 
 ---
 

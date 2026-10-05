@@ -6,7 +6,7 @@ import { ChangePassword } from '@/components/settings/ChangePassword';
 import { PresetManager } from '@/components/settings/PresetManager';
 import { ThresholdsPanel } from '@/components/settings/ThresholdsPanel';
 import { KeyIcon, MonitorIcon, MoonIcon, SlidersIcon, SunIcon, UserIcon } from '@/components/ui/icons';
-import { Collapse, KV, Spinner, fmtDate } from '@/components/ui/primitives';
+import { Collapse, FoldToggle, KV, Spinner, fmtDate } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/app-context';
 import { useI18n } from '@/lib/i18n';
@@ -85,7 +85,7 @@ export default function SettingsPage() {
     <div className="stack">
       <div className="grid-2 items-start">
         <section className="card">
-          <h2 className="card-title mb-3">
+          <h2 className="card-title mb-3"><FoldToggle />
             <SlidersIcon />
             {t('Preferences', 'การแสดงผล')}
           </h2>
@@ -136,7 +136,7 @@ export default function SettingsPage() {
         </section>
 
         <section className="card" id="password">
-          <h2 className="card-title mb-3">
+          <h2 className="card-title mb-3"><FoldToggle />
             <KeyIcon />
             {t('Change password', 'เปลี่ยนรหัสผ่าน')}
           </h2>
@@ -145,7 +145,7 @@ export default function SettingsPage() {
       </div>
 
       <section className="card">
-        <h2 className="card-title">
+        <h2 className="card-title"><FoldToggle />
           {t('Analysis model', 'โมเดลที่ใช้วิเคราะห์')} <span className="tag">{t('this account', 'บัญชีนี้')}</span>
         </h2>
         <p className="card-sub mb-3">
@@ -208,7 +208,7 @@ export default function SettingsPage() {
       </section>
 
       <section className="card">
-        <h2 className="card-title">{t('Saved axis presets', 'ค่าแกนที่บันทึกไว้')}</h2>
+        <h2 className="card-title"><FoldToggle />{t('Saved axis presets', 'ค่าแกนที่บันทึกไว้')}</h2>
         <p className="card-sub mb-3">
           {t(
             'Axes are fitted and saved in a case’s "Plot axes" step. New images of the same size use the newest preset automatically.',

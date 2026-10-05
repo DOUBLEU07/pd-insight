@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from app.api.v1 import auth, batches, cases, exports, training
+from app.api.v1 import auth, batches, cases, exports, training, trash_api
 from app.core.config import settings
 from app.models import entities  # noqa: F401  (registers the tables)
 
@@ -33,9 +33,22 @@ def run_migrations() -> None:
     command.upgrade(config, "head")
 
 
+def purge_expired_trash() -> None:
+    """Drop whatever has sat in any account's trash past the retention window."""
+    from app.db.session import SessionLocal
+    from app.services import trash
+
+    with SessionLocal() as db:
+        removed = trash.purge_expired(db)
+        db.commit()
+    if removed:
+        logging.getLogger(__name__).info("Purged %d expired trash item(s)", removed)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     run_migrations()
+    purge_expired_trash()
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     settings.results_dir.mkdir(parents=True, exist_ok=True)
     yield
@@ -65,6 +78,7 @@ app.include_router(cases.router, prefix="/api/v1")
 app.include_router(batches.router, prefix="/api/v1")
 app.include_router(exports.router, prefix="/api/v1")
 app.include_router(training.router, prefix="/api/v1")
+app.include_router(trash_api.router, prefix="/api/v1")
 
 
 @app.get("/api/v1/health")

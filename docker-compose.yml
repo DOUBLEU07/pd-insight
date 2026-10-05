@@ -31,6 +31,7 @@ services:
       MODELS_DIR: /models
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       ENABLE_ML: ${ENABLE_ML:-true}
+      ADMIN_USERNAMES: ${ADMIN_USERNAMES:-}
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:

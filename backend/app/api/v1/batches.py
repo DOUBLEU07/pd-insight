@@ -23,7 +23,7 @@ from app.models.entities import (
     User,
     UserThreshold,
 )
-from app.services import rules
+from app.services import rules, trash
 from app.services.case_service import (
     log_usage,
     next_batch_key,
@@ -280,14 +280,11 @@ def get_batch(
 def delete_batch(
     batch_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ) -> None:
+    """Move a batch and its cases to the trash."""
     batch = owned_batch(db, batch_id, user)
 
-    case_ids = [c.id for c in batch.cases]
-    if case_ids:
-        db.execute(delete(EditHistory).where(EditHistory.case_id.in_(case_ids)))
-
     name, count = batch.name, len(batch.cases)
-    db.delete(batch)
+    trash.trash_batch(db, batch)
     log_usage(db, user.username, "delete_batch", f"{name} ({count} cases)")
     db.commit()
 
@@ -426,13 +423,18 @@ def create_preset(
     if payload.y_bottom_plot <= payload.y_top_plot:
         raise HTTPException(status_code=400, detail="y_bottom must be greater than y_top.")
 
+    # Trashed presets are included: the name is still taken by the row, so
+    # saving under it takes that preset out of the trash and overwrites it.
     existing = db.scalar(
-        select(CalibrationPreset).where(
+        select(CalibrationPreset)
+        .where(
             CalibrationPreset.preset_name == payload.preset_name,
             CalibrationPreset.owner_id == user.id,
         )
+        .execution_options(include_deleted=True)
     )
     if existing:
+        existing.deleted_at = None
         # Same name means "update this preset", matching the notebook's behaviour
         # of overwriting a preset row rather than appending duplicates.
         for field, value in payload.model_dump().items():
@@ -455,7 +457,7 @@ def delete_preset(
     preset_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ) -> None:
     preset = owned_preset(db, preset_id, user)
-    db.delete(preset)
+    trash.trash_preset(db, preset)
     log_usage(db, user.username, "delete_calibration_preset", preset.preset_name)
     db.commit()
 

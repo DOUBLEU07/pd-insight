@@ -24,6 +24,8 @@ interface AppContextValue {
   signIn: (username: string, password: string) => Promise<void>;
   signUp: (username: string, password: string, role: string) => Promise<void>;
   signOut: () => Promise<void>;
+  /** Record that the first-use tutorial was finished or skipped (false shows it again). */
+  setTutorialSeen: (seen: boolean) => Promise<void>;
   toast: (message: string) => void;
 }
 
@@ -89,7 +91,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     async (username: string, password: string) => {
       const res = await api.login(username, password);
       storeSession(res.access_token, { username: res.username, role: res.role });
-      setUser({ username: res.username, role: res.role });
+      setUser(await api.me().catch(() => ({ username: res.username, role: res.role })));
       router.push('/dashboard');
     },
     [router],
@@ -99,7 +101,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     async (username: string, password: string, role: string) => {
       const res = await api.signup(username, password, role);
       storeSession(res.access_token, { username: res.username, role: res.role });
-      setUser({ username: res.username, role: res.role });
+      setUser(await api.me().catch(() => ({ username: res.username, role: res.role })));
       router.push('/dashboard');
     },
     [router],
@@ -116,9 +118,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     router.push('/login');
   }, [router]);
 
+  const setTutorialSeen = useCallback(async (seen: boolean) => {
+    setUser((u) => (u ? { ...u, tutorial_seen: seen } : u));
+    try {
+      await api.setTutorialSeen(seen);
+    } catch {
+      /* worst case it shows once more next sign-in */
+    }
+  }, []);
+
   const value = useMemo(
-    () => ({ user, ready, options, refreshOptions, signIn, signUp, signOut, toast }),
-    [user, ready, options, refreshOptions, signIn, signUp, signOut, toast],
+    () => ({ user, ready, options, refreshOptions, signIn, signUp, signOut, setTutorialSeen, toast }),
+    [user, ready, options, refreshOptions, signIn, signUp, signOut, setTutorialSeen, toast],
   );
 
   return (

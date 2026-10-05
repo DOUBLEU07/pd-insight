@@ -43,6 +43,11 @@ def create_access_token(username: str, role: str) -> str:
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
+def is_admin(user: User) -> bool:
+    """Whether the account may collect the datasets other accounts shared."""
+    return user.role == "admin" or user.username in settings.admin_username_list
+
+
 def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),

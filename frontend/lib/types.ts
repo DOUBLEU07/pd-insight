@@ -352,6 +352,8 @@ export interface TrainingStats {
   training_runs: number;
   usage_events: number;
   username: string;
+  /** May download the datasets other accounts agreed to share. */
+  is_admin: boolean;
   tensorflow_available: boolean;
   recommended_split: Record<DatasetSplit, number>;
   canonical_classes: string[];
@@ -410,4 +412,21 @@ export interface ModelEvaluation {
   accuracy?: number;
   samples?: EvaluationSample[];
   history?: Partial<Record<'loss' | 'val_loss' | 'acc' | 'val_acc', number[]>>;
+}
+
+/** A model whose owner agreed to share its dataset, as an admin sees it. */
+export interface SharedModel extends TrainedModel {
+  owner: string;
+}
+
+export type TrashKind = 'batch' | 'case' | 'model' | 'preset';
+
+/** Something deleted, waiting in the trash until `expires_at`. */
+export interface TrashItem {
+  kind: TrashKind;
+  id: number;
+  name: string;
+  detail: string;
+  deleted_at: string;
+  expires_at: string;
 }

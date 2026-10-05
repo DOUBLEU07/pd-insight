@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -10,6 +13,7 @@ from app.core.security import (
     create_access_token,
     get_current_user,
     hash_password,
+    is_admin,
     verify_password,
 )
 from app.db.session import get_db
@@ -89,8 +93,31 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
 
 
 @router.get("/me")
-def me(user: User = Depends(get_current_user)) -> dict[str, str]:
-    return {"username": user.username, "role": user.role}
+def me(user: User = Depends(get_current_user)) -> dict[str, Any]:
+    return {
+        "username": user.username,
+        "role": user.role,
+        "is_admin": is_admin(user),
+        # Per account rather than per browser, so the first-use tutorial does
+        # not come back on every new device.
+        "tutorial_seen": user.tutorial_seen_at is not None,
+    }
+
+
+class TutorialRequest(BaseModel):
+    # False brings the tutorial back on the next page load.
+    seen: bool = True
+
+
+@router.post("/tutorial")
+def set_tutorial_seen(
+    payload: TutorialRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    user.tutorial_seen_at = datetime.now(timezone.utc) if payload.seen else None
+    db.commit()
+    return {"tutorial_seen": payload.seen}
 
 
 class ChangePasswordRequest(BaseModel):

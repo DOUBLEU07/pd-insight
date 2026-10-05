@@ -31,10 +31,18 @@ export function PresetManager() {
   }, [load]);
 
   async function remove(p: CalibrationPreset) {
-    if (!window.confirm(t(`Delete preset "${p.preset_name}"?`, `ลบค่าแกน "${p.preset_name}"?`))) return;
+    if (
+      !window.confirm(
+        t(
+          `Move preset "${p.preset_name}" to the trash? You can restore it for 30 days.`,
+          `ย้ายค่าแกน "${p.preset_name}" ไปถังขยะ? กู้คืนได้ภายใน 30 วัน`,
+        ),
+      )
+    )
+      return;
     try {
       await api.deletePreset(p.id);
-      toast(t(`Deleted "${p.preset_name}"`, `ลบ "${p.preset_name}" แล้ว`));
+      toast(t(`Moved "${p.preset_name}" to the trash`, `ย้าย "${p.preset_name}" ไปถังขยะแล้ว`));
       void load();
     } catch (e) {
       toast(e instanceof Error ? e.message : t('Delete failed', 'ลบไม่สำเร็จ'));

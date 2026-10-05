@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { AssessmentChoice } from '@/components/case/AssessmentChoice';
 import { SeverityGroupCards, SEVERITY_PILL, type SeverityKey } from '@/components/case/SeverityGroups';
 import { ArrowRightIcon, TrashIcon } from '@/components/ui/icons';
-import { EmptyRow, Meter, Spinner, StatusBadge, fmtDate, severityBucket } from '@/components/ui/primitives';
+import { EmptyRow, FoldToggle, Meter, Spinner, StatusBadge, fmtDate, severityBucket } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/app-context';
 import { withinDateFilter, type DateFilter } from '@/lib/filters';
@@ -49,15 +49,15 @@ export default function DashboardPage() {
     if (
       !window.confirm(
         t(
-          `Delete "${name}" and its ${count} case(s)? This cannot be undone.`,
-          `ลบ "${name}" และเคสทั้งหมด ${count} เคส? ไม่สามารถย้อนกลับได้`,
+          `Move "${name}" and its ${count} case(s) to the trash? You can restore it for 30 days.`,
+          `ย้าย "${name}" และเคสทั้งหมด ${count} เคสไปถังขยะ? กู้คืนได้ภายใน 30 วัน`,
         ),
       )
     )
       return;
     try {
       await api.deleteBatch(id);
-      toast(t(`Deleted "${name}"`, `ลบ "${name}" แล้ว`));
+      toast(t(`Moved "${name}" to the trash`, `ย้าย "${name}" ไปถังขยะแล้ว`));
       void load();
     } catch (e) {
       toast(e instanceof Error ? e.message : t('Delete failed', 'ลบไม่สำเร็จ'));
@@ -65,10 +65,15 @@ export default function DashboardPage() {
   }
 
   async function removeCase(id: number, name: string) {
-    if (!window.confirm(t(`Delete case "${name}"? This cannot be undone.`, `ลบเคส "${name}"? ไม่สามารถย้อนกลับได้`))) return;
+    if (
+      !window.confirm(
+        t(`Move case "${name}" to the trash? You can restore it for 30 days.`, `ย้ายเคส "${name}" ไปถังขยะ? กู้คืนได้ภายใน 30 วัน`),
+      )
+    )
+      return;
     try {
       await api.deleteCase(id);
-      toast(t(`Deleted ${name}`, `ลบ ${name} แล้ว`));
+      toast(t(`Moved ${name} to the trash`, `ย้าย ${name} ไปถังขยะแล้ว`));
       void load();
     } catch (e) {
       toast(e instanceof Error ? e.message : t('Delete failed', 'ลบไม่สำเร็จ'));
@@ -153,7 +158,7 @@ export default function DashboardPage() {
         <section className="card">
           <div className="card-head">
             <div>
-              <h2 className="card-title">{t('Start an assessment', 'เริ่มการประเมิน')}</h2>
+              <h2 className="card-title"><FoldToggle />{t('Start an assessment', 'เริ่มการประเมิน')}</h2>
               <p className="card-sub">
                 {t('Choose how many images you are assessing.', 'เลือกว่าจะประเมินภาพเดียวหรือทั้งโฟลเดอร์')}
               </p>
@@ -165,7 +170,7 @@ export default function DashboardPage() {
         <section className="card">
           <div className="card-head">
             <div>
-              <h2 className="card-title">{t('Continue reviewing', 'ตรวจต่อ')}</h2>
+              <h2 className="card-title"><FoldToggle />{t('Continue reviewing', 'ตรวจต่อ')}</h2>
               <p className="card-sub">
                 {t('Single-image cases not signed off yet, most severe first.', 'เคสภาพเดี่ยวที่ยังไม่ยืนยัน เรียงจากรุนแรงที่สุด')}
               </p>
@@ -195,7 +200,10 @@ export default function DashboardPage() {
 
       {/* ---------- History / severity ---------- */}
       <section className="card">
-        <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="fold-keep flex flex-wrap items-end justify-between gap-3">
+          <span className="self-center">
+            <FoldToggle />
+          </span>
           <div className="tabs mb-0 flex-1 border-b-0" role="tablist">
             <button type="button" role="tab" aria-selected={tab === 'history'} className={tab === 'history' ? 'on' : ''} onClick={() => setTab('history')}>
               {t('Upload history', 'ประวัติการอัปโหลด')}

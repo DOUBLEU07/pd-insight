@@ -14,10 +14,13 @@ import type {
   PdCase,
   PointsResponse,
   ReviewStatus,
+  SharedModel,
   ThresholdSettings,
   TrainedModel,
   TrainedModelDetail,
   TrainingStats,
+  TrashItem,
+  TrashKind,
   UsageEntry,
 } from './types';
 
@@ -35,6 +38,9 @@ const USER_KEY = 'pdinsight_user';
 export interface SessionUser {
   username: string;
   role: string;
+  /** Filled in from /auth/me; absent on the copy kept in localStorage. */
+  is_admin?: boolean;
+  tutorial_seen?: boolean;
 }
 
 export function getToken(): string | null {
@@ -157,7 +163,7 @@ async function download(path: string, fallbackName: string) {
   const res = await fetch(`${API_BASE}/api/v1${path}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   });
-  if (!res.ok) throw new ApiError(res.status, `Export failed (${res.status})`);
+  if (!res.ok) throw new ApiError(res.status, errorDetail(res.status, await res.text()));
 
   const blob = await res.blob();
   const disposition = res.headers.get('Content-Disposition') ?? '';
@@ -194,6 +200,11 @@ export const api = {
       body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
     }),
   logout: () => request<{ ok: boolean }>('/auth/logout', { method: 'POST' }),
+  setTutorialSeen: (seen: boolean) =>
+    request<{ tutorial_seen: boolean }>('/auth/tutorial', {
+      method: 'POST',
+      body: JSON.stringify({ seen }),
+    }),
   roles: () => request<{ roles: string[] }>('/auth/roles'),
 
   // ---- reference data ----
@@ -353,6 +364,7 @@ export const api = {
   getModel: (id: number) => request<TrainedModelDetail>(`/training/models/${id}`),
 
   createModel: (payload: {
+    /** Blank lets the server pick a free name, e.g. "Hybrid 2". */
     name: string;
     kind: ModelKind;
     classes: ClassSpec[];
@@ -404,6 +416,25 @@ export const api = {
     request<{ ok: boolean }>('/training/models/deactivate', { method: 'POST' }),
 
   deleteModel: (id: number) => request<void>(`/training/models/${id}`, { method: 'DELETE' }),
+
+  setModelConsent: (id: number, dataConsent: boolean) =>
+    request<TrainedModel>(`/training/models/${id}/consent`, {
+      method: 'POST',
+      body: JSON.stringify({ data_consent: dataConsent }),
+    }),
+
+  downloadDataset: (id: number, name: string) =>
+    download(`/training/models/${id}/dataset`, `${name}_dataset.zip`),
+
+  sharedDatasets: () => request<SharedModel[]>('/training/shared'),
+
+  // ---- trash ----
+  listTrash: () => request<{ retention_days: number; items: TrashItem[] }>('/trash'),
+  restoreTrash: (kind: TrashKind, id: number) =>
+    request<{ ok: boolean }>(`/trash/${kind}/${id}/restore`, { method: 'POST' }),
+  purgeTrash: (kind: TrashKind, id: number) =>
+    request<void>(`/trash/${kind}/${id}`, { method: 'DELETE' }),
+  emptyTrash: () => request<void>('/trash', { method: 'DELETE' }),
 
   // ---- exports ----
   exportMaster: (includePending = false) =>

@@ -36,6 +36,7 @@ import logging
 import random
 import shutil
 import threading
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -160,6 +161,31 @@ def write_consent_marker(
         ),
         encoding="utf-8",
     )
+
+
+def write_dataset_zip(owner_id: int, model_id: int, target: Path) -> int:
+    """Pack the staged images into ``target`` as <split>/<class>/<file>.
+
+    The same layout the wizard accepts as a whole-folder upload, so a
+    downloaded dataset can be uploaded again as it is. The fitted model and
+    the evaluation are left out; CONSENT.json goes along so whoever receives a
+    shared dataset can see what the account agreed to. Returns the image count.
+    """
+    root = model_dir(owner_id, model_id)
+    count = 0
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
+        for split in SPLITS:
+            split_root = root / split
+            if not split_root.is_dir():
+                continue
+            for class_folder in sorted(p for p in split_root.iterdir() if p.is_dir()):
+                for image in _images_in(class_folder):
+                    archive.write(image, f"{split}/{class_folder.name}/{image.name}")
+                    count += 1
+        consent = root / "CONSENT.json"
+        if consent.is_file():
+            archive.write(consent, "CONSENT.json")
+    return count
 
 
 def _images_in(folder: Path) -> list[Path]:

@@ -4,13 +4,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ModelEvaluation } from '@/components/training/ModelEvaluation';
 import { NewModelWizard } from '@/components/training/NewModelWizard';
-import { CheckIcon, FileNewIcon, TrainingIcon, TrashIcon } from '@/components/ui/icons';
-import { Collapse, EmptyRow, Readout, Spinner, fmtDate } from '@/components/ui/primitives';
+import { CheckIcon, DownloadIcon, FileNewIcon, TrainingIcon, TrashIcon } from '@/components/ui/icons';
+import { Collapse, EmptyRow, FoldToggle, Readout, Spinner, fmtDate } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/app-context';
 import { useI18n } from '@/lib/i18n';
 import { serverText, stageText } from '@/lib/server-text';
-import type { EditHistoryEntry, TrainedModel, TrainingStats, UsageEntry } from '@/lib/types';
+import type { EditHistoryEntry, SharedModel, TrainedModel, TrainingStats, UsageEntry } from '@/lib/types';
 
 function statusPill(status: TrainedModel['status']): string {
   if (status === 'completed') return 'pill-green';
@@ -75,15 +75,34 @@ export default function TrainingPage() {
   }
 
   async function remove(model: TrainedModel) {
-    if (!window.confirm(t(`Delete model "${model.name}" and its dataset?`, `ลบโมเดล "${model.name}" และชุดข้อมูล?`))) return;
+    if (
+      !window.confirm(
+        t(
+          `Move model "${model.name}" and its dataset to the trash? You can restore it for 30 days.`,
+          `ย้ายโมเดล "${model.name}" และชุดข้อมูลไปถังขยะ? กู้คืนได้ภายใน 30 วัน`,
+        ),
+      )
+    )
+      return;
     setBusy(true);
     try {
       await api.deleteModel(model.id);
       setSelectedId(null);
       await refresh();
-      toast(t(`Deleted ${model.name}`, `ลบ ${model.name} แล้ว`));
+      toast(t(`Moved ${model.name} to the trash`, `ย้าย ${model.name} ไปถังขยะแล้ว`));
     } catch (e) {
       toast(e instanceof Error ? e.message : t('Could not delete that model', 'ลบโมเดลไม่สำเร็จ'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function downloadDataset(model: TrainedModel) {
+    setBusy(true);
+    try {
+      await api.downloadDataset(model.id, model.name);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : t('Could not download the dataset', 'ดาวน์โหลดชุดข้อมูลไม่สำเร็จ'));
     } finally {
       setBusy(false);
     }
@@ -98,7 +117,7 @@ export default function TrainingPage() {
       <section className="card">
         <div className="card-head !mb-0">
           <div>
-            <h2 className="card-title">
+            <h2 className="card-title"><FoldToggle />
               <TrainingIcon />
               {t('Your models', 'โมเดลของคุณ')}
             </h2>
@@ -125,9 +144,21 @@ export default function TrainingPage() {
         )}
       </section>
 
+      <h2 className="section-title">
+        {t('Training history', 'ประวัติการเทรน')} <span className="tag">{history.length}</span>
+      </h2>
+
       {history.length === 0 ? (
         <section className="card empty">
-          <p>{t('No models yet.', 'ยังไม่มีโมเดล')}</p>
+          <p>
+            <b>{t('No training history yet.', 'ยังไม่มีประวัติการเทรน')}</b>
+          </p>
+          <p className="hint mt-1">
+            {t(
+              'Start training with the "New model" button above, or here. Every run you start is listed in this section.',
+              'เริ่มเทรนได้ที่ปุ่ม "สร้างโมเดลใหม่" ด้านบนหรือปุ่มนี้ ทุกการเทรนจะแสดงในส่วนนี้',
+            )}
+          </p>
           <button className="btn btn-primary mt-3" type="button" onClick={() => setWizardOpen(true)}>
             <FileNewIcon />
             {t('Create your first model', 'สร้างโมเดลแรก')}
@@ -160,7 +191,7 @@ export default function TrainingPage() {
             <section className="card min-w-0">
               <div className="card-head">
                 <div className="min-w-0">
-                  <h2 className="card-title text-[19px]">
+                  <h2 className="card-title text-[19px]"><FoldToggle />
                     {selected.name}
                     {selected.is_active && <span className="pill pill-blue">{t('In use', 'ใช้งานอยู่')}</span>}
                     {selected.engine_used === 'simulated' && <span className="pill pill-amber">{t('Simulated', 'จำลอง')}</span>}
@@ -170,7 +201,19 @@ export default function TrainingPage() {
                     {selected.backbone === 'scratch' ? t('compact CNN (retired)', 'CNN ขนาดเล็ก (เลิกใช้แล้ว)') : 'MobileNetV2'}
                   </p>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
+                  {selected.status !== 'draft' && (
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      type="button"
+                      disabled={busy}
+                      title={t('The images this model was trained on, as a zip', 'ภาพที่ใช้เทรนโมเดลนี้ เป็นไฟล์ zip')}
+                      onClick={() => void downloadDataset(selected)}
+                    >
+                      <DownloadIcon />
+                      {t('Download dataset', 'ดาวน์โหลดชุดข้อมูล')}
+                    </button>
+                  )}
                   {selected.can_activate && !selected.is_active && (
                     <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => void activate(selected)}>
                       <CheckIcon />
@@ -222,6 +265,8 @@ export default function TrainingPage() {
           )}
         </div>
       )}
+
+      {stats?.is_admin && <SharedDatasets />}
 
       <div>
         <Collapse title={t('Before you train: dataset checklist', 'ก่อนเทรน: รายการตรวจชุดข้อมูล')}>
@@ -379,5 +424,88 @@ function ActivityLog() {
         )}
       </div>
     </details>
+  );
+}
+
+/** Admins only: every dataset another account agreed to share, ready to download. */
+function SharedDatasets() {
+  const { toast } = useApp();
+  const { t, locale } = useI18n();
+  const [rows, setRows] = useState<SharedModel[] | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  useEffect(() => {
+    api
+      .sharedDatasets()
+      .then(setRows)
+      .catch(() => setRows([]));
+  }, []);
+
+  async function download(m: SharedModel) {
+    setBusyId(m.id);
+    try {
+      await api.downloadDataset(m.id, `${m.owner}_${m.name}`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : t('Could not download the dataset', 'ดาวน์โหลดชุดข้อมูลไม่สำเร็จ'));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <section className="card table-card">
+      <div className="card-head">
+        <div>
+          <h2 className="card-title">
+            <FoldToggle />
+            {t('Shared datasets', 'ชุดข้อมูลที่แบ่งปัน')} <span className="tag">admin</span>
+          </h2>
+          <p className="card-sub">
+            {t(
+              'Datasets other accounts agreed to share with the developers. Only these can be downloaded here.',
+              'ชุดข้อมูลที่บัญชีอื่นยินยอมแบ่งปันให้ผู้พัฒนา ดาวน์โหลดได้เฉพาะรายการเหล่านี้',
+            )}
+          </p>
+        </div>
+      </div>
+      {rows === null ? (
+        <Spinner />
+      ) : (
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>{t('Account', 'บัญชี')}</th>
+                <th>{t('Model', 'โมเดล')}</th>
+                <th>{t('Classes', 'คลาส')}</th>
+                <th>{t('Images', 'ภาพ')}</th>
+                <th>{t('Shared on', 'วันที่ยินยอม')}</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((m) => (
+                <tr key={m.id} className="row-hover">
+                  <td>{m.owner}</td>
+                  <td>
+                    <b>{m.name}</b> <span className="text-[13px] text-muted">{m.kind_label}</span>
+                  </td>
+                  <td className="text-muted">{m.class_names.join(' / ')}</td>
+                  <td className="num">{m.dataset_size}</td>
+                  <td className="whitespace-nowrap text-muted">{fmtDate(m.consent_at, locale)}</td>
+                  <td className="text-right">
+                    <button type="button" className="btn btn-secondary btn-sm" disabled={busyId === m.id} onClick={() => void download(m)}>
+                      <DownloadIcon />
+                      {t('Download', 'ดาวน์โหลด')}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {rows.length === 0 && <EmptyRow colSpan={6}>{t('No account has shared a dataset yet.', 'ยังไม่มีบัญชีใดแบ่งปันชุดข้อมูล')}</EmptyRow>}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }

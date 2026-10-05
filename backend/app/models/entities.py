@@ -21,9 +21,46 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import event
+from sqlalchemy.orm import (
+    Mapped,
+    ORMExecuteState,
+    Session,
+    mapped_column,
+    relationship,
+    with_loader_criteria,
+)
 
 from app.db.session import Base
+
+
+# Deleting a batch, case, trained model or calibration preset moves it to the
+# trash rather than removing the row: it can be restored for TRASH_RETENTION_DAYS
+# and is purged after that (app.services.trash). While trashed, the row is
+# hidden from every ORM query, relationship loads included, by the criteria
+# below, so no endpoint has to remember to filter it. The trash itself reads
+# with execution_options(include_deleted=True).
+TRASH_RETENTION_DAYS = 30
+
+
+class SoftDelete:
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+
+
+@event.listens_for(Session, "do_orm_execute")
+def _hide_trashed(state: ORMExecuteState) -> None:
+    if (
+        state.is_select
+        and not state.is_column_load
+        and not state.execution_options.get("include_deleted", False)
+    ):
+        state.statement = state.statement.options(
+            with_loader_criteria(
+                SoftDelete, lambda cls: cls.deleted_at.is_(None), include_aliases=True
+            )
+        )
 
 
 class User(Base):
@@ -36,6 +73,11 @@ class User(Base):
     # used to gate any endpoint.
     role: Mapped[str] = mapped_column(String(32), default="researcher")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # When the account finished or skipped the first-use tutorial; null means
+    # it is shown on the next sign-in.
+    tutorial_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     cases: Mapped[list["Case"]] = relationship(back_populates="owner")
 
@@ -70,7 +112,7 @@ class UserThreshold(Base):
     )
 
 
-class Batch(Base):
+class Batch(SoftDelete, Base):
     """One upload event: a single image or a whole folder import.
 
     Owned by the account that created it. Batches and their cases are private
@@ -94,7 +136,7 @@ class Batch(Base):
     )
 
 
-class Case(Base):
+class Case(SoftDelete, Base):
     __tablename__ = "cases"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -262,7 +304,7 @@ class Case(Base):
         return 2 if self.tf_filename else 1
 
 
-class CalibrationPreset(Base):
+class CalibrationPreset(SoftDelete, Base):
     __tablename__ = "calibration_presets"
     # Scoped per owner, so two testers can both keep a preset called
     # "lab_default" without colliding.
@@ -316,7 +358,7 @@ class UsageLog(Base):
     )
 
 
-class TrainedModel(Base):
+class TrainedModel(SoftDelete, Base):
     """One model the account built from its own dataset on the Training page.
 
     A row is created the moment the wizard is opened (``status="draft"``), so
