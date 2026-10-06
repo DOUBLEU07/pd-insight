@@ -33,6 +33,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
+import queue
 import random
 import shutil
 import threading
@@ -335,10 +337,26 @@ def balance_warnings(summary: dict[str, Any], class_names: list[str]) -> list[st
 # =========================================================================
 # LOADING
 # =========================================================================
+def _compact(image: np.ndarray) -> np.ndarray:
+    """Keep one channel as float16: a sixth of the float32 RGB tensor.
+
+    Preprocessing ends in grayscale_to_rgb, so the three channels are equal,
+    and the values lie in [0, 1], where float16 is accurate to about 5e-4.
+    Holding whole splits as float32 RGB (~600 KB an image) is what ran the API
+    container out of memory and got it killed mid-run (exit code 137).
+    """
+    return image[..., :1].astype(np.float16)
+
+
+def _expand(batch: np.ndarray) -> np.ndarray:
+    """Back to the float32 RGB the network takes, one batch at a time."""
+    return np.repeat(batch.astype(np.float32), 3, axis=-1)
+
+
 def _load_split(
     owner_id: int, model_id: int, split: str, class_names: list[str], kind: str
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, list[dict[str, str | None]]]:
-    """Decode and preprocess one split.
+    """Decode and preprocess one split, stored compact (see `_compact`).
 
     Returns (PRPD batch, T-F batch, one-hot labels, sources), where `sources`
     names the file(s) behind each row relative to the model folder, so a
@@ -363,9 +381,9 @@ def _load_split(
             # Decode into locals first: a half-appended sample would shift every
             # later label against its image.
             try:
-                prpd = ml.preprocess_for_classification(read_image(prpd_path))
+                prpd = _compact(ml.preprocess_for_classification(read_image(prpd_path)))
                 tf_map = (
-                    ml.preprocess_for_classification(read_image(tf_path))
+                    _compact(ml.preprocess_for_classification(read_image(tf_path)))
                     if tf_path is not None
                     else None
                 )
@@ -386,7 +404,7 @@ def _load_split(
 
     if not prpd_images:
         size = settings.img_size_classification
-        empty = np.zeros((0, size, size, 3), dtype=np.float32)
+        empty = np.zeros((0, size, size, 1), dtype=np.float16)
         labels_empty = np.zeros((0, len(class_names)), dtype=np.float32)
         return empty, (empty if kind == "hybrid" else None), labels_empty, []
 
@@ -394,8 +412,8 @@ def _load_split(
     one_hot[np.arange(len(labels)), labels] = 1.0
 
     return (
-        np.stack(prpd_images).astype(np.float32),
-        np.stack(tf_images).astype(np.float32) if kind == "hybrid" else None,
+        np.stack(prpd_images),
+        np.stack(tf_images) if kind == "hybrid" else None,
         one_hot,
         sources,
     )
@@ -606,6 +624,39 @@ def _set_progress(model_id: int, progress: int, stage: str) -> None:
         db.close()
 
 
+def _batches(tf: Any, inputs: list[np.ndarray], y: np.ndarray | None, batch_size: int, shuffle: bool) -> Any:
+    """Feed compact arrays to Keras one expanded batch at a time.
+
+    Passing the arrays to fit() directly would make TensorFlow copy the whole
+    split into a float32 tensor up front, undoing the saving.
+    """
+
+    class Batches(tf.keras.utils.PyDataset):
+        def __init__(self) -> None:
+            super().__init__()
+            self.order = np.arange(len(inputs[0]))
+            self.rng = np.random.default_rng(0)
+            if shuffle:
+                self.rng.shuffle(self.order)
+
+        def __len__(self) -> int:
+            return math.ceil(len(self.order) / batch_size)
+
+        def __getitem__(self, index: int) -> tuple[Any, ...]:
+            rows = np.sort(self.order[index * batch_size : (index + 1) * batch_size])
+            # A tuple, not a list: Keras builds the batch signature from it and
+            # rejects a list for the two-input Hybrid model.
+            x = tuple(_expand(a[rows]) for a in inputs)
+            x_in = x if len(x) > 1 else x[0]
+            return (x_in,) if y is None else (x_in, y[rows])
+
+        def on_epoch_end(self) -> None:
+            if shuffle:
+                self.rng.shuffle(self.order)
+
+    return Batches()
+
+
 def _train_with_tensorflow(
     tf: Any,
     owner_id: int,
@@ -640,8 +691,11 @@ def _train_with_tensorflow(
         if kind == "hybrid" and train_tf is not None:
             valid_tf, train_tf = train_tf[valid_idx], train_tf[train_idx]
 
-    train_inputs = [train_prpd, train_tf] if kind == "hybrid" else train_prpd
-    valid_inputs = [valid_prpd, valid_tf] if kind == "hybrid" else valid_prpd
+    def arrays(prpd: np.ndarray, tf_map: np.ndarray | None) -> list[np.ndarray]:
+        return [prpd, tf_map] if kind == "hybrid" and tf_map is not None else [prpd]
+
+    train_inputs = _batches(tf, arrays(train_prpd, train_tf), train_y, batch_size, shuffle=True)
+    valid_inputs = _batches(tf, arrays(valid_prpd, valid_tf), valid_y, batch_size, shuffle=False)
 
     _set_progress(model_id, 30, "Building the network")
     network = _build_network(tf, len(class_names), kind, config)
@@ -653,11 +707,8 @@ def _train_with_tensorflow(
 
     history = network.fit(
         train_inputs,
-        train_y,
         epochs=max_epochs,
-        batch_size=batch_size,
-        validation_data=(valid_inputs, valid_y),
-        shuffle=True,
+        validation_data=valid_inputs,
         verbose=0,
         callbacks=[
             _Progress(),
@@ -670,7 +721,7 @@ def _train_with_tensorflow(
     _set_progress(model_id, 90, "Evaluating on the test set")
     evaluation: dict[str, Any] | None = None
     if len(test_prpd):
-        test_inputs = [test_prpd, test_tf] if kind == "hybrid" else test_prpd
+        test_inputs = _batches(tf, arrays(test_prpd, test_tf), None, batch_size, shuffle=False)
         predictions = network.predict(test_inputs, verbose=0)
         accuracy = _accuracy(predictions, test_y)
         measured_on = "the held-out test set"
@@ -713,8 +764,8 @@ def _run(model_id: int) -> None:
     db = SessionLocal()
     try:
         row = db.get(TrainedModel, model_id)
-        if row is None:
-            return
+        if row is None or row.status != "queued":
+            return  # deleted, or no longer waiting, while it sat in the queue
         owner_id = row.owner_id
         kind = row.kind
         model_name = row.name
@@ -794,6 +845,87 @@ def _run(model_id: int) -> None:
     )
 
 
+# Runs go through one worker, one at a time. Two runs fitting side by side
+# (the wizard's PRPD-only + Hybrid pair) doubled the memory and got the API
+# container killed. The second waits as "queued" instead.
+_queue: "queue.Queue[int]" = queue.Queue()
+_pending: set[int] = set()
+_running: int | None = None
+_lock = threading.Lock()
+_worker: threading.Thread | None = None
+
+QUEUED_STAGE = "Waiting for the previous training run to finish"
+
+
+def _work() -> None:
+    global _running
+    while True:
+        model_id = _queue.get()
+        with _lock:
+            _pending.discard(model_id)
+            _running = model_id
+        try:
+            _run(model_id)
+        except Exception:  # never let one run stop the worker
+            logger.exception("Training worker crashed on run %s", model_id)
+        finally:
+            with _lock:
+                _running = None
+            _queue.task_done()
+
+
 def start(model_id: int) -> None:
-    """Kick the run off in the background so the request returns immediately."""
-    threading.Thread(target=_run, args=(model_id,), daemon=True, name=f"train-{model_id}").start()
+    """Queue a run; the request returns immediately."""
+    global _worker
+    with _lock:
+        ahead = len(_pending) + (1 if _running is not None else 0)
+        _pending.add(model_id)
+        if _worker is None or not _worker.is_alive():
+            _worker = threading.Thread(target=_work, daemon=True, name="train-worker")
+            _worker.start()
+    if ahead:
+        _set_progress(model_id, 0, QUEUED_STAGE)
+    _queue.put(model_id)
+
+
+def is_in_progress(model_id: int) -> bool:
+    """Whether this process is running or holding the run, as opposed to a
+    row left "running" by a process that died."""
+    with _lock:
+        return model_id == _running or model_id in _pending
+
+
+def is_fitting(model_id: int) -> bool:
+    """Whether this run is the one on the worker right now (not just queued)."""
+    with _lock:
+        return model_id == _running
+
+
+INTERRUPTED_ERROR = (
+    "Training stopped because the server restarted during the run. If it keeps "
+    "happening, the server may be running out of memory: train one model at a "
+    "time or use fewer images. Press Train again to retry."
+)
+
+
+def recover_interrupted_runs() -> int:
+    """Fail runs a previous process left queued or running.
+
+    Called at startup, when no run can be in progress yet. Without it a run
+    killed with the process (out of memory, container restart) stays "running"
+    for good, and a running model can be neither deleted nor trained again.
+    """
+    db = SessionLocal()
+    try:
+        rows = db.scalars(
+            select(TrainedModel).where(TrainedModel.status.in_(("queued", "running")))
+        ).all()
+        for row in rows:
+            row.status = "failed"
+            row.stage = "Failed"
+            row.error = INTERRUPTED_ERROR
+            row.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        return len(rows)
+    finally:
+        db.close()

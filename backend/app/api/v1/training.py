@@ -531,7 +531,7 @@ def start_training(
 ) -> dict[str, Any]:
     """Check the dataset, snapshot the thresholds, and start the run."""
     row = _owned(db, model_id, user)
-    if row.status in ("queued", "running"):
+    if row.status in ("queued", "running") and training.is_in_progress(row.id):
         raise HTTPException(status_code=409, detail="This model is already training.")
     if row.status == "completed":
         raise HTTPException(status_code=409, detail="This model has already been trained.")
@@ -605,12 +605,22 @@ def deactivate_models(
 def delete_model(
     model_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ) -> None:
-    """Move a model to the trash. A draft (a cancelled wizard) is removed outright."""
+    """Move a model to the trash. A draft (a cancelled wizard) is removed outright.
+
+    Only the run actually fitting right now is protected. A run still waiting
+    in the queue is skipped by the worker once its row is gone, and a row left
+    "running" by a process that died is not running at all.
+    """
     row = _owned(db, model_id, user)
-    if row.status in ("queued", "running"):
+    if row.status in ("queued", "running") and training.is_fitting(row.id):
         raise HTTPException(
             status_code=409, detail="Wait for this run to finish before deleting it."
         )
+    if row.status in ("queued", "running"):
+        # Restored from the trash later, it must not look as if it still runs.
+        row.status = "failed"
+        row.stage = "Failed"
+        row.error = "Cancelled before it finished."
 
     name = row.name
     if row.status == "draft":

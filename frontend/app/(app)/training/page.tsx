@@ -4,10 +4,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ModelEvaluation } from '@/components/training/ModelEvaluation';
 import { NewModelWizard } from '@/components/training/NewModelWizard';
-import { CheckIcon, DownloadIcon, FileNewIcon, TrainingIcon, TrashIcon } from '@/components/ui/icons';
+import { CheckIcon, DownloadIcon, FileNewIcon, RestoreIcon, TrainingIcon, TrashIcon } from '@/components/ui/icons';
 import { Collapse, EmptyRow, FoldToggle, Readout, Spinner, fmtDate } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
-import { useApp } from '@/lib/app-context';
+import { TRASH_LINK, useApp } from '@/lib/app-context';
 import { useI18n } from '@/lib/i18n';
 import { serverText, stageText } from '@/lib/server-text';
 import type { EditHistoryEntry, SharedModel, TrainedModel, TrainingStats, UsageEntry } from '@/lib/types';
@@ -78,8 +78,8 @@ export default function TrainingPage() {
     if (
       !window.confirm(
         t(
-          `Move model "${model.name}" and its dataset to the trash? You can restore it for 30 days.`,
-          `ย้ายโมเดล "${model.name}" และชุดข้อมูลไปถังขยะ? กู้คืนได้ภายใน 30 วัน`,
+          `Move model "${model.name}" and its dataset to the trash? You can restore it for 30 days from Trash (the bin icon at the top right).`,
+          `ย้ายโมเดล "${model.name}" และชุดข้อมูลไปถังขยะ? กู้คืนได้ภายใน 30 วันที่ถังขยะ (ไอคอนถังขยะมุมขวาบน)`,
         ),
       )
     )
@@ -89,9 +89,23 @@ export default function TrainingPage() {
       await api.deleteModel(model.id);
       setSelectedId(null);
       await refresh();
-      toast(t(`Moved ${model.name} to the trash`, `ย้าย ${model.name} ไปถังขยะแล้ว`));
+      toast(t(`Moved ${model.name} to the trash`, `ย้าย ${model.name} ไปถังขยะแล้ว`), TRASH_LINK);
     } catch (e) {
       toast(e instanceof Error ? e.message : t('Could not delete that model', 'ลบโมเดลไม่สำเร็จ'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Retry a failed run on the dataset it already has. */
+  async function trainAgain(model: TrainedModel) {
+    setBusy(true);
+    try {
+      await api.startTraining(model.id);
+      await refresh();
+      toast(t(`Training ${model.name} again`, `เริ่มเทรน ${model.name} อีกครั้ง`));
+    } catch (e) {
+      toast(e instanceof Error ? e.message : t('Could not start training', 'เริ่มเทรนไม่สำเร็จ'));
     } finally {
       setBusy(false);
     }
@@ -220,12 +234,18 @@ export default function TrainingPage() {
                       {t('Use for new cases', 'ใช้กับเคสใหม่')}
                     </button>
                   )}
-                  {selected.status !== 'running' && selected.status !== 'queued' && (
-                    <button className="btn btn-danger btn-sm" type="button" disabled={busy} onClick={() => void remove(selected)}>
-                      <TrashIcon />
-                      {t('Delete', 'ลบ')}
+                  {selected.status === 'failed' && (
+                    <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => void trainAgain(selected)}>
+                      <RestoreIcon />
+                      {t('Train again', 'เทรนอีกครั้ง')}
                     </button>
                   )}
+                  {/* Always offered: a queued or stuck run can be deleted; the API
+                      refuses only the run that is actually fitting right now. */}
+                  <button className="btn btn-danger btn-sm" type="button" disabled={busy} onClick={() => void remove(selected)}>
+                    <TrashIcon />
+                    {t('Delete', 'ลบ')}
+                  </button>
                 </div>
               </div>
 

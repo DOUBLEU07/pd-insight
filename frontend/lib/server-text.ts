@@ -9,6 +9,7 @@ type T = <V = string>(en: V, th: V) => V;
 
 const STAGES: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^Queued$/, () => 'รอคิว'],
+  [/^Waiting for the previous training run to finish$/, () => 'รอการเทรนก่อนหน้าให้เสร็จก่อน'],
   [/^Preparing the dataset$/, () => 'กำลังเตรียมชุดข้อมูล'],
   [/^Loading training images$/, () => 'กำลังโหลดภาพชุดฝึก'],
   [/^Loading validation and test images$/, () => 'กำลังโหลดภาพชุดตรวจสอบและทดสอบ'],
@@ -51,6 +52,12 @@ const MESSAGES: [RegExp, (m: RegExpMatchArray) => string][] = [
     /^Accuracy measured on the training set \(no test images were uploaded\)\.$/,
     () => 'ความแม่นยำวัดจากชุดฝึก (ไม่มีภาพชุดทดสอบ)',
   ],
+  [
+    /^Training stopped because the server restarted during the run\./,
+    () =>
+      'การเทรนหยุดเพราะเซิร์ฟเวอร์รีสตาร์ทระหว่างเทรน ถ้าเกิดซ้ำ เซิร์ฟเวอร์อาจหน่วยความจำไม่พอ ให้เทรนทีละโมเดลหรือลดจำนวนภาพ แล้วกด "เทรนอีกครั้ง"',
+  ],
+  [/^Cancelled before it finished\.$/, () => 'ยกเลิกก่อนเทรนเสร็จ'],
   [/^Simulated run:/, () => 'การเทรนแบบจำลอง: ไม่มี TensorFlow จึงไม่ได้ฝึกโครงข่ายจริง ตัวเลขประมาณจากองค์ประกอบของชุดข้อมูล ไม่ใช่ความแม่นยำที่วัดได้'],
   // ---- input checks on an uploaded case (cv/detect.py validate_input) ----
   [/^PRPD filename appears inconsistent with PRPD input field\.$/, () => 'ชื่อไฟล์ PRPD ไม่ตรงกับช่อง PRPD'],

@@ -297,6 +297,16 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
           <button
             type="button"
+            className={`tool-btn hide-sm ${pathname.startsWith('/trash') ? 'active' : ''}`}
+            onClick={() => router.push('/trash')}
+            title={t('Trash: restore what you deleted (30 days)', 'ถังขยะ: กู้คืนสิ่งที่ลบ (30 วัน)')}
+            aria-label={t('Trash', 'ถังขยะ')}
+          >
+            <TrashIcon />
+          </button>
+
+          <button
+            type="button"
             className={`tool-btn hide-sm ${pathname.startsWith('/settings') ? 'active' : ''}`}
             onClick={() => router.push('/settings')}
             title={t('Settings', 'การตั้งค่า')}

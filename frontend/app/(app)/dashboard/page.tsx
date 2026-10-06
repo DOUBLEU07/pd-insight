@@ -8,7 +8,7 @@ import { SeverityGroupCards, SEVERITY_PILL, type SeverityKey } from '@/component
 import { ArrowRightIcon, TrashIcon } from '@/components/ui/icons';
 import { EmptyRow, FoldToggle, Meter, Spinner, StatusBadge, fmtDate, severityBucket } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
-import { useApp } from '@/lib/app-context';
+import { TRASH_LINK, useApp } from '@/lib/app-context';
 import { withinDateFilter, type DateFilter } from '@/lib/filters';
 import { useI18n } from '@/lib/i18n';
 import type { DashboardData, PdCase } from '@/lib/types';
@@ -49,15 +49,15 @@ export default function DashboardPage() {
     if (
       !window.confirm(
         t(
-          `Move "${name}" and its ${count} case(s) to the trash? You can restore it for 30 days.`,
-          `ย้าย "${name}" และเคสทั้งหมด ${count} เคสไปถังขยะ? กู้คืนได้ภายใน 30 วัน`,
+          `Move "${name}" and its ${count} case(s) to the trash? You can restore it for 30 days from Trash (the bin icon at the top right).`,
+          `ย้าย "${name}" และเคสทั้งหมด ${count} เคสไปถังขยะ? กู้คืนได้ภายใน 30 วันที่ถังขยะ (ไอคอนถังขยะมุมขวาบน)`,
         ),
       )
     )
       return;
     try {
       await api.deleteBatch(id);
-      toast(t(`Moved "${name}" to the trash`, `ย้าย "${name}" ไปถังขยะแล้ว`));
+      toast(t(`Moved "${name}" to the trash`, `ย้าย "${name}" ไปถังขยะแล้ว`), TRASH_LINK);
       void load();
     } catch (e) {
       toast(e instanceof Error ? e.message : t('Delete failed', 'ลบไม่สำเร็จ'));
@@ -67,13 +67,13 @@ export default function DashboardPage() {
   async function removeCase(id: number, name: string) {
     if (
       !window.confirm(
-        t(`Move case "${name}" to the trash? You can restore it for 30 days.`, `ย้ายเคส "${name}" ไปถังขยะ? กู้คืนได้ภายใน 30 วัน`),
+        t(`Move case "${name}" to the trash? You can restore it for 30 days from Trash (the bin icon at the top right).`, `ย้ายเคส "${name}" ไปถังขยะ? กู้คืนได้ภายใน 30 วันที่ถังขยะ (ไอคอนถังขยะมุมขวาบน)`),
       )
     )
       return;
     try {
       await api.deleteCase(id);
-      toast(t(`Moved ${name} to the trash`, `ย้าย ${name} ไปถังขยะแล้ว`));
+      toast(t(`Moved ${name} to the trash`, `ย้าย ${name} ไปถังขยะแล้ว`), TRASH_LINK);
       void load();
     } catch (e) {
       toast(e instanceof Error ? e.message : t('Delete failed', 'ลบไม่สำเร็จ'));

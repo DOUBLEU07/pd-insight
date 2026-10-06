@@ -49,6 +49,11 @@ def purge_expired_trash() -> None:
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     run_migrations()
     purge_expired_trash()
+    from app.services.ml import training
+
+    # Nothing can be training yet: anything marked so was cut off by a restart.
+    if training.recover_interrupted_runs():
+        logging.getLogger(__name__).warning("Marked interrupted training run(s) as failed")
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     settings.results_dir.mkdir(parents=True, exist_ok=True)
     yield

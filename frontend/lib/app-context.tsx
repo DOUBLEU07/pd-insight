@@ -15,6 +15,15 @@ import { useRouter } from 'next/navigation';
 import { api, clearSession, getStoredUser, getToken, storeSession, type SessionUser } from './api';
 import type { CaseOptions } from './types';
 
+/** A button shown in a toast, e.g. "Open trash" after a delete. */
+export interface ToastAction {
+  label: [string, string];
+  href: string;
+}
+
+/** Shown after anything is moved to the trash, so it can be found again. */
+export const TRASH_LINK: ToastAction = { label: ['Open trash', 'เปิดถังขยะ'], href: '/trash' };
+
 interface AppContextValue {
   user: SessionUser | null;
   ready: boolean;
@@ -26,7 +35,7 @@ interface AppContextValue {
   signOut: () => Promise<void>;
   /** Record that the first-use tutorial was finished or skipped (false shows it again). */
   setTutorialSeen: (seen: boolean) => Promise<void>;
-  toast: (message: string) => void;
+  toast: (message: string, action?: ToastAction) => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -37,6 +46,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [options, setOptions] = useState<CaseOptions | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastAction, setToastAction] = useState<ToastAction | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Restore an existing session on first paint.
@@ -81,10 +91,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     void refreshOptions();
   }, [user, refreshOptions]);
 
-  const toast = useCallback((message: string) => {
+  const toast = useCallback((message: string, action?: ToastAction) => {
     setToastMessage(message);
+    setToastAction(action ?? null);
     if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToastMessage(null), 3200);
+    // Longer when there is something to click.
+    toastTimer.current = setTimeout(() => setToastMessage(null), action ? 7000 : 3200);
   }, []);
 
   const signIn = useCallback(
@@ -138,6 +150,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       {toastMessage && (
         <div className="toast" role="status" aria-live="polite" key={toastMessage}>
           {toastMessage}
+          {toastAction && (
+            <button
+              type="button"
+              className="toast-action"
+              onClick={() => {
+                setToastMessage(null);
+                router.push(toastAction.href);
+              }}
+            >
+              {document.documentElement.lang === 'th' ? toastAction.label[1] : toastAction.label[0]}
+            </button>
+          )}
         </div>
       )}
     </AppContext.Provider>

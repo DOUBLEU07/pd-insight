@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/icons';
 import { DoneBadge, EmptyRow, FoldToggle, Spinner, StatusBadge, UploadBanner, fmt, fmtDate, resultPillClass, severityPillClass } from '@/components/ui/primitives';
 import { api, fileUrl } from '@/lib/api';
-import { useApp } from '@/lib/app-context';
+import { TRASH_LINK, useApp } from '@/lib/app-context';
 import { useI18n } from '@/lib/i18n';
 import type { BatchSummary, CalibrationPreset, PdCase } from '@/lib/types';
 
@@ -505,15 +505,15 @@ function FolderUpload() {
     if (
       !window.confirm(
         t(
-          `Move folder "${b.name}" and its ${b.total} case(s) to the trash? You can restore it for 30 days.`,
-          `ย้ายโฟลเดอร์ "${b.name}" และ ${b.total} เคสไปถังขยะ? กู้คืนได้ภายใน 30 วัน`,
+          `Move folder "${b.name}" and its ${b.total} case(s) to the trash? You can restore it for 30 days from Trash (the bin icon at the top right).`,
+          `ย้ายโฟลเดอร์ "${b.name}" และ ${b.total} เคสไปถังขยะ? กู้คืนได้ภายใน 30 วันที่ถังขยะ (ไอคอนถังขยะมุมขวาบน)`,
         ),
       )
     )
       return;
     try {
       await api.deleteBatch(b.id);
-      toast(t(`Moved ${b.name} to the trash`, `ย้าย ${b.name} ไปถังขยะแล้ว`));
+      toast(t(`Moved ${b.name} to the trash`, `ย้าย ${b.name} ไปถังขยะแล้ว`), TRASH_LINK);
       void loadLists();
     } catch (e) {
       toast(e instanceof Error ? e.message : t('Delete failed', 'ลบไม่สำเร็จ'));
@@ -863,15 +863,15 @@ function ResultsView() {
     if (
       !window.confirm(
         t(
-          `Move case "${c.case_base_name}" to the trash? You can restore it for 30 days.`,
-          `ย้ายเคส "${c.case_base_name}" ไปถังขยะ? กู้คืนได้ภายใน 30 วัน`,
+          `Move case "${c.case_base_name}" to the trash? You can restore it for 30 days from Trash (the bin icon at the top right).`,
+          `ย้ายเคส "${c.case_base_name}" ไปถังขยะ? กู้คืนได้ภายใน 30 วันที่ถังขยะ (ไอคอนถังขยะมุมขวาบน)`,
         ),
       )
     )
       return;
     try {
       await api.deleteCase(c.id);
-      toast(t(`Moved ${c.case_base_name} to the trash`, `ย้าย ${c.case_base_name} ไปถังขยะแล้ว`));
+      toast(t(`Moved ${c.case_base_name} to the trash`, `ย้าย ${c.case_base_name} ไปถังขยะแล้ว`), TRASH_LINK);
       void load();
     } catch (e) {
       toast(e instanceof Error ? e.message : t('Delete failed', 'ลบไม่สำเร็จ'));

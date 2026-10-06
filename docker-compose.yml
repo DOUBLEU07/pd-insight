@@ -21,6 +21,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: pdinsight-api
+    # Comes back by itself if it is ever killed (e.g. out of memory while
+    # training); the interrupted run is then marked failed and can be retried.
+    restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy

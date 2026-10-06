@@ -7,7 +7,7 @@ import { groupCasesBySeverity, SeverityGroupCards, type SeverityKey } from '@/co
 import { ArrowLeftIcon, PlayIcon } from '@/components/ui/icons';
 import { FoldToggle, Meter, Spinner, fmtDate } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
-import { useApp } from '@/lib/app-context';
+import { TRASH_LINK, useApp } from '@/lib/app-context';
 import { useI18n } from '@/lib/i18n';
 import type { BatchSummary } from '@/lib/types';
 
@@ -42,13 +42,13 @@ export default function BatchPreviewPage() {
   async function removeCase(id: number, name: string) {
     if (
       !window.confirm(
-        t(`Move case "${name}" to the trash? You can restore it for 30 days.`, `ย้ายเคส "${name}" ไปถังขยะ? กู้คืนได้ภายใน 30 วัน`),
+        t(`Move case "${name}" to the trash? You can restore it for 30 days from Trash (the bin icon at the top right).`, `ย้ายเคส "${name}" ไปถังขยะ? กู้คืนได้ภายใน 30 วันที่ถังขยะ (ไอคอนถังขยะมุมขวาบน)`),
       )
     )
       return;
     try {
       await api.deleteCase(id);
-      toast(t(`Moved ${name} to the trash`, `ย้าย ${name} ไปถังขยะแล้ว`));
+      toast(t(`Moved ${name} to the trash`, `ย้าย ${name} ไปถังขยะแล้ว`), TRASH_LINK);
       void load();
     } catch (e) {
       toast(e instanceof Error ? e.message : t('Delete failed', 'ลบไม่สำเร็จ'));

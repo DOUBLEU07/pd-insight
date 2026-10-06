@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { TrashIcon } from '@/components/ui/icons';
 import { EmptyRow, Spinner, fmtDate } from '@/components/ui/primitives';
 import { api } from '@/lib/api';
-import { useApp } from '@/lib/app-context';
+import { TRASH_LINK, useApp } from '@/lib/app-context';
 import { useI18n } from '@/lib/i18n';
 import type { CalibrationPreset } from '@/lib/types';
 
@@ -34,15 +34,15 @@ export function PresetManager() {
     if (
       !window.confirm(
         t(
-          `Move preset "${p.preset_name}" to the trash? You can restore it for 30 days.`,
-          `ย้ายค่าแกน "${p.preset_name}" ไปถังขยะ? กู้คืนได้ภายใน 30 วัน`,
+          `Move preset "${p.preset_name}" to the trash? You can restore it for 30 days from Trash (the bin icon at the top right).`,
+          `ย้ายค่าแกน "${p.preset_name}" ไปถังขยะ? กู้คืนได้ภายใน 30 วันที่ถังขยะ (ไอคอนถังขยะมุมขวาบน)`,
         ),
       )
     )
       return;
     try {
       await api.deletePreset(p.id);
-      toast(t(`Moved "${p.preset_name}" to the trash`, `ย้าย "${p.preset_name}" ไปถังขยะแล้ว`));
+      toast(t(`Moved "${p.preset_name}" to the trash`, `ย้าย "${p.preset_name}" ไปถังขยะแล้ว`), TRASH_LINK);
       void load();
     } catch (e) {
       toast(e instanceof Error ? e.message : t('Delete failed', 'ลบไม่สำเร็จ'));
