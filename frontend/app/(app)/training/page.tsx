@@ -66,7 +66,11 @@ export default function TrainingPage() {
     try {
       await api.activateModel(model.id);
       await refresh();
-      toast(t(`New cases will be analysed with ${model.name}`, `เคสใหม่จะวิเคราะห์ด้วย ${model.name}`));
+      toast(
+        model.kind === 'hybrid'
+          ? t(`PRPD + TF cases will be analysed with ${model.name}`, `เคส PRPD + TF จะวิเคราะห์ด้วย ${model.name}`)
+          : t(`PRPD-only cases will be analysed with ${model.name}`, `เคส PRPD อย่างเดียวจะวิเคราะห์ด้วย ${model.name}`),
+      );
     } catch (e) {
       toast(e instanceof Error ? e.message : t('Could not select that model', 'เลือกโมเดลนี้ไม่สำเร็จ'));
     } finally {
@@ -231,7 +235,9 @@ export default function TrainingPage() {
                   {selected.can_activate && !selected.is_active && (
                     <button className="btn btn-primary btn-sm" type="button" disabled={busy} onClick={() => void activate(selected)}>
                       <CheckIcon />
-                      {t('Use for new cases', 'ใช้กับเคสใหม่')}
+                      {selected.kind === 'hybrid'
+                        ? t('Use for PRPD + TF cases', 'ใช้กับเคส PRPD + TF')
+                        : t('Use for PRPD-only cases', 'ใช้กับเคส PRPD อย่างเดียว')}
                     </button>
                   )}
                   {selected.status === 'failed' && (

@@ -25,7 +25,7 @@ from app.db.session import get_db
 from app.models.entities import Batch, CalibrationPreset, Case, User
 from app.services import rules, trash
 from app.services.case_service import (
-    active_model_for,
+    active_models_for,
     find_matching_preset,
     log_edit,
     next_batch_key,
@@ -84,10 +84,9 @@ def options(
 
     # A reviewer must be able to confirm a source the account's own model can
     # actually suggest, so the published list is extended with whatever the
-    # selected model maps its classes onto.
-    active = active_model_for(db, user.id)
+    # selected models (PRPD-only and Hybrid) map their classes onto.
     pd_sources = list(PD_SOURCE_OPTIONS)
-    if active is not None:
+    for active in active_models_for(db, user.id).values():
         for source in active["scheme"].pd_sources.values():
             if source not in pd_sources:
                 pd_sources.append(source)

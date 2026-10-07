@@ -412,8 +412,9 @@ export const api = {
   activateModel: (id: number) =>
     request<TrainedModel>(`/training/models/${id}/activate`, { method: 'POST' }),
 
-  deactivateModels: () =>
-    request<{ ok: boolean }>('/training/models/deactivate', { method: 'POST' }),
+  /** Back to the published model for one input mode, or for both when omitted. */
+  deactivateModels: (kind?: ModelKind) =>
+    request<{ ok: boolean }>(`/training/models/deactivate${kind ? `?kind=${kind}` : ''}`, { method: 'POST' }),
 
   deleteModel: (id: number) => request<void>(`/training/models/${id}`, { method: 'DELETE' }),
 

@@ -565,7 +565,11 @@ def start_training(
 def activate_model(
     model_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ) -> dict[str, Any]:
-    """Score this account's future analyses with this model."""
+    """Score this account's future analyses of this model's input mode with it.
+
+    One model per kind is active: selecting a PRPD-only model replaces only the
+    previous PRPD-only choice, and the Hybrid choice stays as it was.
+    """
     row = _owned(db, model_id, user)
     if not _serialize(row)["can_activate"]:
         raise HTTPException(
@@ -578,7 +582,11 @@ def activate_model(
 
     db.execute(
         update(TrainedModel)
-        .where(TrainedModel.owner_id == user.id, TrainedModel.id != row.id)
+        .where(
+            TrainedModel.owner_id == user.id,
+            TrainedModel.kind == row.kind,
+            TrainedModel.id != row.id,
+        )
         .values(is_active=False)
     )
     row.is_active = True
@@ -590,13 +598,23 @@ def activate_model(
 
 @router.post("/models/deactivate")
 def deactivate_models(
-    db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    kind: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> dict[str, bool]:
-    """Go back to the published Colab models for this account."""
-    db.execute(
-        update(TrainedModel).where(TrainedModel.owner_id == user.id).values(is_active=False)
+    """Go back to the published Colab model for one input mode, or for both."""
+    if kind is not None and kind not in MODEL_KINDS:
+        raise HTTPException(status_code=400, detail="Model type must be PRPD-only or Hybrid.")
+    stmt = update(TrainedModel).where(TrainedModel.owner_id == user.id)
+    if kind is not None:
+        stmt = stmt.where(TrainedModel.kind == kind)
+    db.execute(stmt.values(is_active=False))
+    log_usage(
+        db,
+        user.username,
+        "select_model",
+        f"published Colab model ({MODEL_KINDS[kind]})" if kind else "published Colab models",
     )
-    log_usage(db, user.username, "select_model", "published Colab models")
     db.commit()
     return {"ok": True}
 

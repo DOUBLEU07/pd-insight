@@ -67,37 +67,47 @@ def thresholds_for_case(db: Session, case: Case) -> rules.Thresholds:
 # =========================================================================
 # PER-ACCOUNT TRAINED MODEL
 # =========================================================================
-def active_model_for(db: Session, user_id: int | None) -> dict[str, Any] | None:
-    """The trained model this account has selected for analysis, if any.
+def active_models_for(db: Session, user_id: int | None) -> dict[str, dict[str, Any]]:
+    """The trained models this account selected for analysis, keyed by kind.
 
-    Returns None, meaning "use the published Colab models", unless the account
-    has an active run that finished and produced a real .keras artifact. A
-    simulated run has no artifact, so selecting one never silently changes how
-    a case is scored.
+    An account picks one model per input mode: one for PRPD-only cases and one
+    for PRPD + TF (Hybrid) cases. A kind missing from the result means "use the
+    published Colab model" for that mode. Only a finished run with a real
+    .keras artifact counts; a simulated run has none, so selecting one never
+    silently changes how a case is scored.
 
-    The returned dict carries the model's class scheme, so a model predicting
-    its own class set is interpreted through its own PD source and severity
-    mapping rather than the published one.
+    Each entry carries the model's class scheme, so a model predicting its own
+    class set is interpreted through its own PD source and severity mapping
+    rather than the published one.
     """
     if user_id is None:
-        return None
+        return {}
 
-    row = db.scalar(
-        select(TrainedModel).where(
+    rows = db.scalars(
+        select(TrainedModel)
+        .where(
             TrainedModel.owner_id == user_id,
             TrainedModel.is_active.is_(True),
             TrainedModel.status == "completed",
         )
-    )
-    if row is None or not row.artifact_path:
-        return None
+        .order_by(TrainedModel.id.desc())
+    ).all()
 
-    return {
-        "name": row.name,
-        "kind": row.kind,
-        "path": row.artifact_path,
-        "scheme": scheme_from_model(row),
-    }
+    active: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if row.artifact_path and row.kind not in active:
+            active[row.kind] = {
+                "name": row.name,
+                "kind": row.kind,
+                "path": row.artifact_path,
+                "scheme": scheme_from_model(row),
+            }
+    return active
+
+
+def active_model_for(db: Session, user_id: int | None, kind: str) -> dict[str, Any] | None:
+    """The model selected for one input mode ("prpd_only" or "hybrid"), if any."""
+    return active_models_for(db, user_id).get(kind)
 
 
 def scheme_from_model(row: TrainedModel) -> rules.ClassScheme:
@@ -299,7 +309,10 @@ def run_analysis(db: Session, case: Case, decision_mode: str | None = None) -> C
     # ---- 2. classification ----
     thresholds = thresholds_for_case(db, case)
 
-    active = active_model_for(db, case.owner_id)
+    # The model selected for this case's input mode: a TF map means Hybrid.
+    active = active_model_for(
+        db, case.owner_id, "hybrid" if tf_rgb is not None else "prpd_only"
+    )
     prediction = ml.classify(prpd_rgb, tf_rgb, active)
     scores = prediction["scores_percent"]
     # A case is read through the scheme of the model that actually ran. When

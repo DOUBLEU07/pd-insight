@@ -11,7 +11,7 @@ import { api } from '@/lib/api';
 import { useApp } from '@/lib/app-context';
 import { useI18n } from '@/lib/i18n';
 import { useTheme, type Theme } from '@/lib/theme';
-import type { TrainedModel } from '@/lib/types';
+import type { ModelKind, TrainedModel } from '@/lib/types';
 
 export default function SettingsPage() {
   const { options, user, toast } = useApp();
@@ -46,16 +46,17 @@ export default function SettingsPage() {
     return () => clearTimeout(timer);
   }, []);
 
-  async function selectModel(model: TrainedModel | null) {
+  async function selectModel(kind: ModelKind, model: TrainedModel | null) {
     setSwitching(true);
+    const mode = kind === 'hybrid' ? t('PRPD + TF cases', 'เคส PRPD + TF') : t('PRPD-only cases', 'เคส PRPD อย่างเดียว');
     try {
       if (model) await api.activateModel(model.id);
-      else await api.deactivateModels();
+      else await api.deactivateModels(kind);
       await loadModels();
       toast(
         model
-          ? t(`New cases will be analysed with ${model.name}`, `เคสใหม่จะวิเคราะห์ด้วย ${model.name}`)
-          : t('New cases will be analysed with the published models', 'เคสใหม่จะวิเคราะห์ด้วยโมเดลตั้งต้น'),
+          ? t(`${mode} will be analysed with ${model.name}`, `${mode}จะวิเคราะห์ด้วย ${model.name}`)
+          : t(`${mode} will be analysed with the published model`, `${mode}จะวิเคราะห์ด้วยโมเดลตั้งต้น`),
       );
     } catch (e) {
       toast(e instanceof Error ? e.message : t('Could not change the analysis model', 'เปลี่ยนโมเดลไม่สำเร็จ'));
@@ -69,7 +70,6 @@ export default function SettingsPage() {
   const ml = options.ml_status;
   const c = options.constants;
   const selectable = (models ?? []).filter((m) => m.can_activate);
-  const selected = selectable.find((m) => m.is_active) ?? null;
 
   const yesNo = (v: boolean) => (
     <span className={`pill ${v ? 'pill-green' : 'pill-red'}`}>{v ? t('Available', 'พร้อมใช้') : t('Missing', 'ไม่พบ')}</span>
@@ -150,60 +150,82 @@ export default function SettingsPage() {
         </h2>
         <p className="card-sub mb-3">
           {t(
-            'Applies the next time a case is analysed. Signed-off cases keep the model they were scored with.',
-            'มีผลกับการวิเคราะห์ครั้งถัดไป เคสที่ยืนยันแล้วยังใช้ผลจากโมเดลเดิม',
+            'Choose one model for PRPD-only cases and one for PRPD + TF cases. Applies the next time a case is analysed; signed-off cases keep the model they were scored with.',
+            'เลือกโมเดลสำหรับเคส PRPD อย่างเดียว และโมเดลสำหรับเคส PRPD + TF แยกกัน มีผลกับการวิเคราะห์ครั้งถัดไป เคสที่ยืนยันแล้วยังใช้ผลจากโมเดลเดิม',
           )}
         </p>
         {models === null ? (
           <Spinner />
         ) : (
-          <div className="grid gap-2 md:grid-cols-2">
-            <label className={`option-card ${selected === null ? 'on' : ''}`}>
-              <input
-                type="radio"
-                name="analysis-model"
-                checked={selected === null}
-                disabled={switching}
-                onChange={() => void selectModel(null)}
-              />
-              <span>
-                <span className="lbl">{t('Published models (default)', 'โมเดลตั้งต้น (ค่าเริ่มต้น)')}</span>
-                <span className="desc">
-                  {t(
-                    'PRPD_2_Only for a PRPD image, PRPD_3_Hybrid when a TF map is added.',
-                    'PRPD_2_Only สำหรับภาพ PRPD และ PRPD_3_Hybrid เมื่อมี TF Map',
-                  )}
-                </span>
-              </span>
-            </label>
-            {selectable.map((m) => (
-              <label key={m.id} className={`option-card ${m.is_active ? 'on' : ''}`}>
-                <input
-                  type="radio"
-                  name="analysis-model"
-                  checked={m.is_active}
-                  disabled={switching}
-                  onChange={() => void selectModel(m)}
-                />
-                <span>
-                  <span className="lbl">
-                    {m.name} <span className="tag">{m.kind_label}</span>
-                  </span>
-                  <span className="desc">
-                    {t(
-                      `${m.accuracy}% test accuracy · ${m.dataset_size} samples · trained ${fmtDate(m.finished_at, locale)}`,
-                      `ความแม่นยำ ${m.accuracy}% · ${m.dataset_size} ตัวอย่าง · เทรนเมื่อ ${fmtDate(m.finished_at, locale)}`,
+          <div className="grid gap-5 lg:grid-cols-2">
+            {(
+              [
+                [
+                  'prpd_only',
+                  t('PRPD-only cases', 'เคส PRPD อย่างเดียว'),
+                  t('A case with a PRPD image and no TF map.', 'เคสที่มีภาพ PRPD และไม่มี TF Map'),
+                  'PRPD_2_Only',
+                ],
+                [
+                  'hybrid',
+                  t('PRPD + TF cases (Hybrid)', 'เคส PRPD + TF (Hybrid)'),
+                  t('A case with a PRPD image and its TF map.', 'เคสที่มีภาพ PRPD คู่กับ TF Map'),
+                  'PRPD_3_Hybrid',
+                ],
+              ] as const
+            ).map(([kind, title, desc, published]) => {
+              const choices = selectable.filter((m) => m.kind === kind);
+              const current = choices.find((m) => m.is_active) ?? null;
+              return (
+                <div key={kind}>
+                  <span className="label">{title}</span>
+                  <p className="field-help !mt-0 mb-2">{desc}</p>
+                  <div className="space-y-2">
+                    <label className={`option-card ${current === null ? 'on' : ''}`}>
+                      <input
+                        type="radio"
+                        name={`analysis-model-${kind}`}
+                        checked={current === null}
+                        disabled={switching}
+                        onChange={() => void selectModel(kind, null)}
+                      />
+                      <span>
+                        <span className="lbl">{t('Published model (default)', 'โมเดลตั้งต้น (ค่าเริ่มต้น)')}</span>
+                        <span className="desc">{published}</span>
+                      </span>
+                    </label>
+                    {choices.map((m) => (
+                      <label key={m.id} className={`option-card ${m.is_active ? 'on' : ''}`}>
+                        <input
+                          type="radio"
+                          name={`analysis-model-${kind}`}
+                          checked={m.is_active}
+                          disabled={switching}
+                          onChange={() => void selectModel(kind, m)}
+                        />
+                        <span>
+                          <span className="lbl">{m.name}</span>
+                          <span className="desc">
+                            {t(
+                              `${m.accuracy}% test accuracy · ${m.dataset_size} samples · trained ${fmtDate(m.finished_at, locale)}`,
+                              `ความแม่นยำ ${m.accuracy}% · ${m.dataset_size} ตัวอย่าง · เทรนเมื่อ ${fmtDate(m.finished_at, locale)}`,
+                            )}
+                          </span>
+                        </span>
+                      </label>
+                    ))}
+                    {choices.length === 0 && (
+                      <p className="hint text-[13.5px]">
+                        {kind === 'hybrid'
+                          ? t('No trained Hybrid model yet. Train one under Model development.', 'ยังไม่มีโมเดล Hybrid ที่เทรนแล้ว เทรนได้ที่หน้าพัฒนาโมเดล')
+                          : t('No trained PRPD-only model yet. Train one under Model development.', 'ยังไม่มีโมเดล PRPD-only ที่เทรนแล้ว เทรนได้ที่หน้าพัฒนาโมเดล')}
+                      </p>
                     )}
-                  </span>
-                </span>
-              </label>
-            ))}
+                  </div>
+                </div>
+              );
+            })}
           </div>
-        )}
-        {models !== null && selectable.length === 0 && (
-          <p className="hint mt-2">
-            {t('Models you train under Model development will appear here.', 'โมเดลที่คุณเทรนในหน้าพัฒนาโมเดลจะแสดงที่นี่')}
-          </p>
         )}
       </section>
 
